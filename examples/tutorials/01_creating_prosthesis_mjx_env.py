@@ -15,7 +15,7 @@ env_params = {
     "prosthesis_side": "right",
     "prosthesis_type": "transtibial", 
     "amputated_tibia_length": 0.2,
-    "reattach_muscles": {"med_gas": [0,0,0]},
+    "reattach_muscles": {"med_gas": [0,0,0]}, # reconnect muscels of the residual limb after amputation
 
     # Prosthesis parameters
     "prosthesis_subtype": "SACH",
@@ -47,7 +47,7 @@ env_params = {
     "contact_geom_solref":  [-900,-300],
     
     # for evaluation 
-    "add_sensors": True,
+    "add_sensors": True,    # add biomechanical sensors for evaluation and analysis
 
 }
 
@@ -56,11 +56,13 @@ env = ImitationFactory.make("MjxSkeletonMuscleProsthesis", **env_params, default
 
 # create keys
 key = jax.random.key(0)
-n_envs = 100
-keys = jax.random.split(key, n_envs + 1)
+n_envs = 100                                # 100 environments simultaneously in parallel
+keys = jax.random.split(key, n_envs + 1)    
 key, env_keys = keys[0], keys[1:]
 
-# jit and vmap all functions needed
+# jit and vmap all functions needed         
+# vmap: vectorizes simulation functions across all environments
+# jit: Compiles functions for high-performance GPU execution
 rng_reset = jax.jit(jax.vmap(env.mjx_reset))
 rng_step = jax.jit(jax.vmap(env.mjx_step))
 rng_sample_uni_action = jax.jit(jax.vmap(env.sample_action_space))
@@ -81,7 +83,7 @@ while i < 100000:
     state = rng_step(state, action)
 
     # parallel render
-    env.mjx_render(state)
+    env.mjx_render(state)   # render simulation visually
 
     step += n_envs
 

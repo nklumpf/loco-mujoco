@@ -5,7 +5,8 @@ import jax.numpy as jnp
 from loco_mujoco.core import ObservationType
 from loco_mujoco import ImitationFactory
 
-randomization_type = "ProsthesisRandomizer"
+# Enables prosthesis-specific domain randomization.
+randomization_type = "ProsthesisRandomizer" 
 
 randomization_config = {
     "visualize_randomization": True,  # visualize the randomized parameters, including body position and orientation, in the rendered environment
@@ -20,7 +21,7 @@ randomization_config = {
     # body position
     "randomize_prosthesis_body_position": True,
     # "prosthesis_body_position_range": {'pylon_socket': {'x': [-0.02, 0.02], 'z': [-0.02, 0.02]}, 'talus': {'x': [-0.02, 0.02], 'z': [-0.02, 0.02]}},
-    "prosthesis_body_position_range": {'pylon_socket': {'x': [-0.4, -0.4]}}, #, 'talus': {'x': [0.1, 0.1]}},
+    "prosthesis_body_position_range": {'pylon_socket': {'x': [-0.4, -0.4]}}, #, 'talus': {'x': [0.1, 0.1]}}, # random alignment is fixed
 
     # body orientation
     "randomize_prosthesis_body_orientation": False, #True,
@@ -53,7 +54,8 @@ key, env_keys = keys[0], keys[1:]
 # jit and vmap all functions needed
 rng_reset = jax.jit(jax.vmap(env.mjx_reset))
 rng_step = jax.jit(jax.vmap(env.mjx_step))
-rng_sample_uni_action = jax.jit(jax.vmap(env.sample_action_space))
+rng_sample_uni_action = jax.jit(jax.vmap(env.sample_action_space)) 
+# sample_action_space: Generates random control actions.
 
 # reset env
 state = rng_reset(env_keys)

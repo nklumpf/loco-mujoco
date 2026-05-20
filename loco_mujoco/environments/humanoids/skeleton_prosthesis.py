@@ -63,6 +63,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
             f"Must be one of {self.VALID_PROSTHESIS_TYPES}"
             )
 
+        # Check if all required arguments are defined
         if "prosthesis_subtype" not in kwargs:
             raise ValueError("Missing required argument: 'prosthesis_subtype'")
         self.prosthesis_subtype = kwargs.pop("prosthesis_subtype")
@@ -77,22 +78,24 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
 
         self.tibia_socket_offset = kwargs.pop("tibia_socket_offset", [0.0, 0.0, 0.0])
         
+        # TODO: ESR DATA and If?!
         self.SACH_total_mass = kwargs.pop("SACH_total_mass", 0.575)  # kg # From literature for specific foot size (based on amputee height)
         # Socket parameters estimated from models and papers
         self.original_socket_mass = kwargs.pop("socket_mass", 0.3)  # kg
         self.original_socket_inertia = kwargs.pop("socket_inertia", [0.0136, 0.0021, 0.0136, 0, 0, 0])  # kg*m^2
         self.original_socket_relative_center_of_mass = kwargs.pop("socket_relative_center_of_mass", np.array([0, 0.0491, 0])) # meters
 
-        
+        # Handling joints
         self.joint_stiffness = kwargs.pop("joint_stiffness", None) # Dictionary with joint name and stiffness value
         self.joint_damping = kwargs.pop("joint_damping", None) # Dictionary with joint name and damping value
         self.remove_joint_names = kwargs.pop("remove_joint_names", None) # List of joint names to remove
+        self.adapt_joint_range = kwargs.pop("adapt_joint_range", None) # Dict with joint name and new limits 
 
+        # Preparation of Muscle Reattachment
         self.reattach_muscles = kwargs.pop("reattach_muscles", None) # Dictionary with muscle name and reattachment amputation offset
         self.reattach_muscle_names = self.reattach_muscles.keys() if self.reattach_muscles is not None else []
 
-        self.adapt_joint_range = kwargs.pop("adapt_joint_range", None) # Dict with joint name and new limits 
-
+        # Observation for RL
         self.add_pos_ori_to_observation = kwargs.pop("add_pos_ori_to_observation", False) 
         if self.add_pos_ori_to_observation:
             domain_randomization_params = kwargs.get("domain_randomization_params", {})
@@ -101,16 +104,16 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
             if domain_randomization_params.get("randomize_prosthesis_body_orientation"):
                 self.prosthesis_body_orientation_range = domain_randomization_params.get("prosthesis_body_orientation_range")
             
-
+        # Visualization of Prosthesis
         self.visualize_prosthesis = kwargs.pop("visualize_prosthesis", True)
 
-
+        # socket joint DOF
         if "socket_joint_dofs" in kwargs:
             self.socket_joint_dofs = kwargs.pop("socket_joint_dofs")
         else: 
             self.socket_joint_dofs = ['socket_tx', 'socket_ty', 'socket_tz', 'socket_flexion', 'socket_adduction', 'socket_rotation']
 
-
+        # TODO: Change for ESR -- socket joint stiffness
         self.default_socket_joint_stiffnesses = {
             "socket_tx": 43500,
             "socket_ty": 43500,
@@ -122,6 +125,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         user_stiffnesses = kwargs.pop("socket_joint_stiffnesses", {}) # If provided should be dict like defult_socket_joint_stiffnesses
         self.socket_joint_stiffnesses = {**self.default_socket_joint_stiffnesses, **user_stiffnesses}
 
+        # TODO: Change for ESR -- socket joint damping
         self.default_socket_joint_dampings = {
             "socket_tx": 40,
             "socket_ty": 4,
@@ -385,17 +389,17 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
             if hasattr(self, 'visualize_prosthesis') and self.visualize_prosthesis:
                 spec.add_mesh(
                     name="socket",
-                    file="/home/nadinebadie/loco-mujoco-clean/loco_mujoco/models/prosthesis/meshes/socket.stl",
+                    file="/home/naomiklumpf/loco-mujoco/loco_mujoco/models/prosthesis/meshes/socket.stl",
                     scale=[0.001,0.001,0.001]
                 )
                 spec.add_mesh(
                     name="pylon",
-                    file="/home/nadinebadie/loco-mujoco-clean/loco_mujoco/models/prosthesis/meshes/pylon.stl",
+                    file="/home/naomiklumpf/loco-mujoco/loco_mujoco/models/prosthesis/meshes/pylon.stl",
                     scale=[0.001,0.001,0.001]
                 )
                 spec.add_mesh(
                     name="sach",
-                    file="/home/nadinebadie/loco-mujoco-clean/loco_mujoco/models/prosthesis/meshes/sach.stl",
+                    file="/home/naomiklumpf/loco-mujoco/loco_mujoco/models/prosthesis/meshes/sach.stl",
                     scale=[0.001,0.001,0.001],
                 )
                 
