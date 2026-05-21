@@ -137,6 +137,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         user_dampings = kwargs.pop("socket_joint_dampings", {}) # If provided should be dict like defult_socket_joint_dampings
         self.socket_joint_dampings = {**self.default_socket_joint_dampings, **user_dampings}
 
+        # TODO: Change for ESR -- joint socket ranges
         self.default_socket_joint_ranges = {
             "socket_tx": [-0.01, 0.01],
             "socket_ty": [-0.02, 0.02],
@@ -148,12 +149,15 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         user_ranges = kwargs.pop("socket_joint_ranges", {}) # If provided should be dict like defult_socket_joint_ranges
         self.socket_joint_ranges = {**self.default_socket_joint_ranges, **user_ranges}
 
+        # TODO: think about it, whether changed or not -> biomechanics True
+        # Slackness of the socket joint
         self.delta_shift_slack = kwargs.pop("delta_shift_slack", 0.0) # Amount of slack in the socket joint that allows for shifting before applying forces to the body (to prevent large forces from small position changes within the socket)
         self.socket_ty_slack = kwargs.pop("socket_ty_slack", False) # Whether to add slack to the socket_ty joint to allow for vertical movement within the socket before forces are applied (to prevent large forces from small position changes within the socket in the vertical direction)
 
         # For evaluation add sensors 
         self.add_sensors = kwargs.pop("add_sensors", False) # Whether to add sensors to the prosthesis bodies for evaluation and visualization purposes
 
+        # TODO: Maybe in future more detailed ground contact modeling? BUT NOT AT THE MOMENT
         # Handle multi-contact geom options and solref
         if "multi_contact_geom_type" in kwargs:
             self.multi_contact_geom_type = kwargs.pop("multi_contact_geom_type") # Only 2boxes implemented for now
@@ -163,9 +167,11 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         self.actuators_removed = []
         self.amputated_body_names = []
 
+        # Load XML-File data into spec and modify leg 
         spec = mujoco.MjSpec.from_file(self.get_default_xml_file_path())
         spec = self.replace_leg_level(spec)
 
+        # Replace data with values in dictionaries
         if self.adapt_joint_range is not None: 
             for joint_name, limit_range in self.adapt_joint_range.items():
                 self.limit_joint_range(spec, joint_name, limit_range)
@@ -234,6 +240,18 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         
     
     def limit_joint_range(self, spec, joint_name, joint_limit):
+        """
+        Iterates through the MuJoCo model specification (spec) to find a specific joint
+        and overrides its movement boundaries (joint limits).
+
+        Note: The input values in 'joint_limit' must be provided in DEGREES, 
+        as they are automatically converted to RADIANS inside this method.
+        
+        Args:
+            spec: The MjSpec object containing the current MuJoCo model blueprint.
+            joint_name (str): The name of the joint to modify (e.g., "prosthetic_ankle").
+            joint_limit (tuple/list): A pair of [min_angle, max_angle] in degrees.
+        """
         for j in spec.joints:
             if j.name == joint_name: 
                 j.range = [np.deg2rad(joint_limit[0]), np.deg2rad(joint_limit[1])]
@@ -261,6 +279,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                     f"talus{side}"
                 ]
             ]
+            # SACH Subtype
             if hasattr(self, "prosthesis_subtype") and self.prosthesis_subtype == "SACH": 
                 print("Using SACH prosthesis subtype. Scaling foot and adapting body properties accordingly.")
                 spec = self.adapt_spec_with_prosthesis_adapter(spec)
@@ -268,7 +287,17 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                 if self.reattach_muscles is not None:
                     spec = self.reattach_muscles_above_amputation(spec)
 
+            # ESR Subtype
+             # TODO: Adapt for ESR subtype
+            if hasattr(self, "prosthesis_subtype") and self.prosthesis_subtype == "ESR": 
+                print("Using ESR prosthesis subtype. Scaling foot and adapting body properties accordingly.")
+                # spec = self.adapt_spec_with_prosthesis_adapter(spec)
+                # spec = self.add_SACH_properties(spec)
+                # if self.reattach_muscles is not None:
+                #     spec = self.reattach_muscles_above_amputation(spec)
+
             return spec 
+
         elif self.prosthesis_type == "transfemoral": 
             raise NotImplementedError("Transfemoral prosthesis not implemented yet.")
         else:
@@ -276,6 +305,21 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         
     
     def calculate_tibia_socket_parameters(self, spec: mujoco.MjSpec, original_talus_pos, side): 
+        """
+        Calculates geometric, mass, and inertial properties for the amputated 
+        residual limb (tibia) and its matching prosthetic socket.
+        
+        Scales down the biological tibia based on amputation length, adjusts 
+        its inertia tensor, and determines the layout dimensions for the socket.
+        
+        Args:
+            spec (mujoco.MjSpec): The active MuJoCo model blueprint.
+            original_talus_pos (array): 3D position of the original ankle bone.
+            side (str): Side modifier (e.g., "_l" or "_r").
+            
+        Returns:
+            dict: Socket dimensions, mass, center of mass, position, and radius.
+        """
         tibia_name = f"tibia{side}"
         tibia_body = spec.find_body(tibia_name)
         original_tibia_mass = tibia_body.mass
@@ -336,11 +380,26 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
             "socket_pos_relative_to_tibia": socket_pos_relative_to_tibia,
             "socket_radius": socket_radius}
 
-
         return socket_params 
 
-    def create_socket(self, spec,tibia_body, socket_params, side): 
 
+    def create_socket(self, spec,tibia_body, socket_params, side): 
+        """
+        Replaces the biological lower leg and foot geometries with prosthetic components.
+        
+        This function handles the removal of the biological tibia, fibula, and foot bones 
+        for the specified side. It builds the prosthetic shank structure (socket and pylon) 
+        and attaches either a standard SACH foot or an ESR foot 
+        mesh based on the chosen prosthesis type.
+        
+        Args:
+            spec: The MuJoCo model specification object.
+            tibia_body: The biological tibia body object to attach the socket to.
+            socket_params (dict): Physical and geometric parameters of the socket.
+            side (str): The side of the limb being processed ("_l" or "_r").
+       Returns:
+            prosthetic_shank_body: The newly created MuJoCo body for the prosthesis.
+        """
         if side == "_l":
             side_str = "left"
         else:
@@ -358,6 +417,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
             else self.tibia_socket_overlap
         )
             
+        # Add shank body to tibia_body
         prosthetic_shank_body = tibia_body.add_body(
             name=f"pylon_socket{side}",
             pos=socket_params["socket_pos_relative_to_tibia"],
@@ -371,7 +431,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
             rgba=[0, 1, 0, 1]
         )
 
-
+        # Add an attachment point where the prosthetic foot connects to the pylon
         prosthetic_shank_body.add_site(
             name=f"talus_attachment_site_in_pylon{side}",
             pos=[0, -socket_params["socket_length"] + tibia_socket_overlap, 0],
@@ -379,13 +439,15 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
             rgba=[1, 0, 0, 1]
         )
 
-       
+
         if hasattr(self, 'visualize_prosthesis') and self.visualize_prosthesis:
-           
+            # Delete sound leg parts to replace it with prosthesis
             for g in tibia_body.geoms:
                 if g.name in {f"tibia{side}", f"fibula{side}"}:
                     g.delete()
             self.visualize_prosthesis = True
+            # Load 3D CAD files in MUJoCo system
+            # TODO: ESR-STL file?! -> if-else structure (SACH/ESR)
             if hasattr(self, 'visualize_prosthesis') and self.visualize_prosthesis:
                 spec.add_mesh(
                     name="socket",
@@ -402,7 +464,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                     file="/home/naomiklumpf/loco-mujoco/loco_mujoco/models/prosthesis/meshes/sach.stl",
                     scale=[0.001,0.001,0.001],
                 )
-                
+                # Add loaded 3D models for socket and pylon
                 prosthetic_shank_body.add_geom(
                     name="socket_geom",
                     type=mujoco.mjtGeom.mjGEOM_MESH,
@@ -423,6 +485,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                     group=0            # Ensure it's in a visible group
                 )
 
+                # Delete the sound foot
                 for side in self.prosthesis_side:
                     talus_name = f"talus{side}"
                     talus_body = spec.find_body(talus_name)
@@ -437,6 +500,8 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                     for g in toes_body.geoms:
                         g.delete()
 
+                # Add SACH prosthesis
+                # TODO: Add ESR prosthesis -> if/else
                 talus_body.add_geom(
                     name="sach_geom",
                     type=mujoco.mjtGeom.mjGEOM_MESH,
@@ -449,7 +514,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
 
         socket_joint_offset = (1 / 3) * amputated_tibia_length
 
-
+        # specify DOF with stiffness, damping and joint range
         for joint_type in ["tx", "ty", "tz", "flexion", "adduction", "rotation"]:
             if f"socket_{joint_type}" in self.socket_joint_dofs:
                 joint_name = f"socket_{joint_type}"
@@ -459,7 +524,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
 
                 joint_name = f"socket_{joint_type}{side}"
 
-                
+                # of displacement -> slide joint, if rotation -> hinge joint
                 is_slide = joint_type in {"tx", "ty", "tz"}
                 joint_type_enum = mujoco.mjtJoint.mjJNT_SLIDE if is_slide else mujoco.mjtJoint.mjJNT_HINGE
                 
@@ -472,6 +537,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                     "rotation": [0, 1, 0]
                 }
                 
+                # Add joint of prosthesis
                 prosthetic_shank_body.add_joint(
                     name=joint_name,
                     type=joint_type_enum,
@@ -497,9 +563,11 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         """
         def copy_body_recursive(source_body, parent_mjbody, target_pos=None, target_quat=None):
             """Recursively copy a body and its entire subtree."""
+            # position and orientation for the new body: use target if provided, otherwise keep original
             pos = target_pos if target_pos is not None else source_body.pos
             quat = target_quat if target_quat is not None else source_body.quat
 
+            # generate new body in the target spec with the same properties as the source body
             new_body = parent_mjbody.add_body(
                 name=source_body.name,
                 pos=pos,
@@ -507,11 +575,14 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                 mocap=source_body.mocap,
                 gravcomp=source_body.gravcomp,
             )
-
+            # transfer mass and inertia properties from sound body to prosthesis body
+            # TODO: For ESR less mass as sound foot
+            # ESR NOTE: Carbon fiber spring blades are significantly lighter than biological flesh/bones.
             new_body.mass = source_body.mass
             new_body.ipos = source_body.ipos
             new_body.fullinertia = source_body.fullinertia
 
+            # all physical geoms copied
             for geom in source_body.geoms:
                 new_body.add_geom(
                     name=geom.name, type=geom.type, size=geom.size, pos=geom.pos,
@@ -520,6 +591,8 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                     condim=geom.condim, group=geom.group, material=geom.material,
                 )
 
+            # all biological joints copied
+            # TODO: change stiffness, damping,... for ESR
             for joint in source_body.joints:
                 new_body.add_joint(
                     name=joint.name, type=joint.type, pos=joint.pos, axis=joint.axis,
@@ -527,12 +600,14 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                     limited=joint.limited, springref=joint.springref,
                 )
 
+            # add site for sensoring
             for site in source_body.sites:
                 new_body.add_site(
                     name=site.name, pos=site.pos, quat=site.quat, size=site.size,
                     type=site.type, rgba=site.rgba, group=site.group,
                 )
 
+            # copy recursively for all child bodies
             for child in source_body.bodies:
                 copy_body_recursive(child, new_body)
 
@@ -540,6 +615,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
 
         def find_talus_body(tibia_body, side):
             """Find talus body by name or ankle joint."""
+            # search in biological model for the talus body either by name or by checking for ankle joint connection, to determine where to attach the prosthesis
             for child in tibia_body.bodies:
                 if child.name == f"talus{side}":
                     return child
@@ -557,19 +633,22 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
             if not talus_body:
                 print(f"Error: Talus body not found as child of 'tibia{side}'.")
                 continue
-
+            # calculate socket parameters based on tibia and talus properties
             socket_params= self.calculate_tibia_socket_parameters(
                 spec, talus_body.pos, side
             )
+            # create the prosthetic shank (socket and pylon) and attach it to the tibia
             prosthetic_shank = self.create_socket(
                 spec, tibia_body, socket_params, side
             )
 
+            # search for attachment site on the prosthetic shank where the talus should be connected
             attachment_site = spec.find_site(f"talus_attachment_site_in_pylon{side}")
             if not attachment_site:
                 print(f"Error: Attachment site not found for side {side}.")
                 continue
 
+            # copy talus body and its subtree to the prosthetic shank at the attachment site
             copy_body_recursive(
                 talus_body, prosthetic_shank,
                 target_pos=np.array(attachment_site.pos),
@@ -580,7 +659,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
 
         return spec
     
-
+    # TODO: Implement analogous function for ESR
     def scale_foot_to_SACH_keep_distribution(self, spec: mujoco.MjSpec) -> mujoco.MjSpec:
         """
         Scales the mass and fullinertia of specified foot bodies to a target total mass
@@ -597,16 +676,18 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         fullinteria_dict = {}
 
         foot_body_base_names = ['talus', 'calcn', 'toes']
+        # run loop for amputed sites
         for side in self.prosthesis_side:
             total_original_mass = 0.0
 
             for base_name in foot_body_base_names:
                 body_name = f"{base_name}{side}"
-                body = spec.find_body(body_name)
+                body = spec.find_body(body_name)   # search body in model
+                # save biological mass and inertia in dictonary
                 if body:
                     mass_dict[body_name] = body.mass
                     fullinteria_dict[body_name] = body.fullinertia.copy()
-                    total_original_mass += body.mass
+                    total_original_mass += body.mass # add segment mass to total original mass
                 else:
                     print(f"Warning: Body '{body_name}' not found in model spec.")
 
@@ -620,10 +701,11 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                 for body_name, mass in mass_dict.items()
                 if body_name.endswith(side)
             }
-
+            # Go a second time through the segments to write the new scaled values into the model
             for base_name in foot_body_base_names:
                 body_name = f"{base_name}{side}"
                 body = spec.find_body(body_name)
+                # Guarantee the same mass distribution
                 new_mass = self.SACH_total_mass * mass_ratios[body_name]
                 if body:
                     if body_name in fullinteria_dict and mass_dict[body_name] > 0:
@@ -648,6 +730,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                 # Check if a site with this name already exists to avoid duplicates if function is called multiple times
                 site_name = f"{body_name}_COM_site"
                 site_exists = any(site.name == site_name for site in body.sites)
+                # add a point for the center of mass
                 if not site_exists:
                     body.add_site(
                         name=site_name,
@@ -660,7 +743,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         return spec
     
 
-    
+    # TODO: similar function for ESR
     def add_SACH_properties(self, spec: mujoco.MjSpec) -> mujoco.MjSpec:
         """
         Adapts to foot to be like SACH foot in the prosthesis adapter in the model specification.
@@ -678,6 +761,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         # Talus, Calcn, Toe:  mass, center of mass and inertia --> Scale original mass and inertia down 
         self.scale_foot_to_SACH_keep_distribution(spec)
 
+        # remove joints and corresponding constraints that are irrelevant for SACH
         if self.remove_joint_names is not None:
             #print(f"Removing joints: {self.remove_joint_names} for sides: {self.prosthesis_side}")
             for side in self.prosthesis_side:
@@ -687,6 +771,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                     spec = self.remove_joint(spec, full_joint_name)
                     spec = self.remove_equality(spec, full_joint_name)
         
+        # adapt joint stiffness of remaining joints of the prosthesis
         if self.joint_stiffness is not None:
             #print(f"Adapting joint stiffness for joints: {list(self.joint_stiffness.keys())} for sides: {self.prosthesis_side}")
             for side in self.prosthesis_side:
@@ -694,7 +779,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                     full_joint_name = f"{joint_name}{side}"
                     spec = self.adapt_joint_stiffness(spec, full_joint_name, side)
 
-
+        # adapt damping of remaining joints of the prosthesis -> higher
         if self.joint_damping is not None:
             #print(f"Adapting joint damping for joints: {list(self.joint_damping.keys())} for sides: {self.prosthesis_side}")
             for side in self.prosthesis_side:
@@ -702,11 +787,11 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                     full_joint_name = f"{joint_name}{side}"
                     spec = self.adapt_joint_damping(spec, full_joint_name)
 
-
+        # remove all muscels and tendons that control the foot
         spec = self.remove_site_actuator_tendon(spec)
 
-
         return spec
+
 
     def remove_tendons(self, spec, muscle_names):
         """
@@ -850,8 +935,8 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
             MjSpec: The modified specification with reattached muscles.
         """
         print("Reattaching muscles above amputation...")
-        for side in self.prosthesis_side:
 
+        for side in self.prosthesis_side:
             if side == "_l":
                 side_str = "left"
             else:
@@ -863,6 +948,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                 else self.amputated_tibia_length
             )
             
+            # full names list of the affected muscles
             reattach_muscle_names = [name + side for name in self.reattach_muscle_names]
             
             # Get body references
@@ -912,11 +998,12 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                 new_z = m_z_y * new_y + d_z_y + reattach_offset[2]
                 new_pos = np.array([new_x, new_y, new_z])
                 
-                # Update site
+                # Update site, delete old attachment point
                 old_site = next((s for s in calcn_body.sites if s.name == f"{site_name}-P3"), None)
                 if old_site:
                     old_site.delete()
                 
+                # Reattach the muscle end
                 tibia_body.add_site(
                     name=f"{site_name}-P3",
                     pos=new_pos,
@@ -941,19 +1028,22 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         Returns:
             List[ObservationType]: List of observation space specification.
         """
-
-
         if self.add_pos_ori_to_observation:
             if hasattr(self, 'prosthesis_body_position_range'):
                 rand_pos_body_names=[]
                 observation_spec_body_pos = []
+
+                # extract keys from the prosthesis_body_position_range dictionary 
                 if isinstance(self.prosthesis_body_position_range, dict):
                     rand_pos_body_names = list(self.prosthesis_body_position_range.keys())
+
+                # create names such that prosthesis side is added to body names
                 for b in rand_pos_body_names:
                     for side in self.prosthesis_side:
-                        b = b + side  # Append prosthesis side to body names 
-                        observation_spec_body_pos.append(ObservationType.ModelBodyPos(f"pos_{b}", xml_name=b))
+                        full_body_name = f"{b}{side}"  # Append prosthesis side to body names 
+                        observation_spec_body_pos.append(ObservationType.ModelBodyPos(f"pos_{full_body_name}", xml_name=full_body_name))
 
+            # same for orientation range
             if hasattr(self, 'prosthesis_body_orientation_range'):
                 rand_ori_body_names=[]
                 observation_spec_body_quat = []
@@ -961,21 +1051,22 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                     rand_ori_body_names= list(self.prosthesis_body_orientation_range.keys())
                 for b in rand_ori_body_names: 
                     for side in self.prosthesis_side:   
-                        b = b + side  # Append prosthesis side to body names
-                    observation_spec_body_quat.append(ObservationType.ModelBodyRot(f"quat_{b}", xml_name=b))
+                        full_body_name = f"{b}{side}"   # Append prosthesis side to body names
+                    observation_spec_body_quat.append(ObservationType.ModelBodyRot(f"quat_{full_body_name}", xml_name=full_body_name))
 
-
+        # create list of joint names
         joint_names = []
         for j in spec.joints: 
             joint_names.append(j.name)
 
-
+        # delete root joint
         if 'root' in joint_names: 
             joint_names.remove('root')
 
         observation_spec_joint_pos = []
         observation_spec_joint_vel = []
 
+        # observation of relative joint position and velocity into list for each joint
         for j in joint_names:
             observation_spec_joint_pos.append(ObservationType.JointPos(f"q_{j}", xml_name=j))
             observation_spec_joint_vel.append(ObservationType.JointVel(f"dq_{j}", xml_name=j))
@@ -1014,9 +1105,33 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
 
 
     def _calculate_cylinder_inertia_xorz(self, body_mass, radius, height):
+        """
+        Calculates the mass moment of inertia of a solid cylinder around its 
+        transverse axes (X-axis or Z-axis) passing through its center of mass.
+        Formula:
+            I_x = I_z = (1/12) * m * (3 * r^2 + h^2)
+        Args:
+            body_mass (float): The mass (m) of the cylinder in kg.
+            radius (float): The outer radius (r) of the cylinder in meters.
+            height (float): The total longitudinal length/height (h) of the cylinder in meters.
+        Returns:
+            float: The calculated transverse rotational inertia (I_x or I_z) in kg*m^2.
+        """
         inertia = (1/12)*body_mass * (3*radius**2 + height**2)
         return inertia 
     
+
     def _calculate_cylinder_radius(self, body_mass, cylinder_inertia_y):
+        """
+        Calculates the physical radius of a solid cylinder based on its mass 
+        and its axial mass moment of inertia around the longitudinal axis (Y-axis).
+        Formula derivation:
+            I_y = 0.5 * m * r^2  -->  r = sqrt(2 * I_y / m)
+        Args:
+            body_mass (float): The mass (m) of the cylinder in kg.
+            cylinder_inertia_y (float): The rotational inertia (I_y) around the Y-axis.
+        Returns:
+            float: The calculated cylinder radius (r) in meters.
+        """
         radius = (2*cylinder_inertia_y/body_mass)
         return radius
