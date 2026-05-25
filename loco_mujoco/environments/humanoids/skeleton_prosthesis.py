@@ -78,13 +78,27 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
 
         self.tibia_socket_offset = kwargs.pop("tibia_socket_offset", [0.0, 0.0, 0.0])
         
-        # TODO: ESR DATA and If?!
-        self.SACH_total_mass = kwargs.pop("SACH_total_mass", 0.575)  # kg # From literature for specific foot size (based on amputee height)
-        # Socket parameters estimated from models and papers
+        # Define parameters for SACH prosthesis, standard values for SACH
+        if hasattr(self, "prosthesis_subtype") and self.prosthesis_subtype == "SACH":
+            self.SACH_total_mass = kwargs.pop("SACH_total_mass", 0.575)  # kg 
+            # From literature for specific foot size (based on amputee height)
+            self.foot_total_mass = self.SACH_total_mass
+
+        # NOTE: ESR Data (mass) added
+        # Define parameters for ESR prosthesis
+        if hasattr(self, "prosthesis_subtype") and self.prosthesis_subtype == "ESR":
+            self.ESR_total_mass = kwargs.pop("ESR_total_mass", 0.5833)  # kg 
+            # From literature based on 
+            ## Willson (2017): A Quasi-Passive Biarticular Prosthesis and Novel Musculoskeletal 
+            ##                 Model for Transtibial Amputees
+            self.foot_total_mass = self.ESR_total_mass
+
+        # Socket parameters estimated from models and papers -> similar for both prosthesis types
         self.original_socket_mass = kwargs.pop("socket_mass", 0.3)  # kg
         self.original_socket_inertia = kwargs.pop("socket_inertia", [0.0136, 0.0021, 0.0136, 0, 0, 0])  # kg*m^2
         self.original_socket_relative_center_of_mass = kwargs.pop("socket_relative_center_of_mass", np.array([0, 0.0491, 0])) # meters
 
+        # TODO: Change for ESR
         # Handling joints
         self.joint_stiffness = kwargs.pop("joint_stiffness", None) # Dictionary with joint name and stiffness value
         self.joint_damping = kwargs.pop("joint_damping", None) # Dictionary with joint name and damping value
@@ -107,13 +121,14 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         # Visualization of Prosthesis
         self.visualize_prosthesis = kwargs.pop("visualize_prosthesis", True)
 
+        # NOTE: For both prosthesis types the same socket values
         # socket joint DOF
         if "socket_joint_dofs" in kwargs:
             self.socket_joint_dofs = kwargs.pop("socket_joint_dofs")
         else: 
             self.socket_joint_dofs = ['socket_tx', 'socket_ty', 'socket_tz', 'socket_flexion', 'socket_adduction', 'socket_rotation']
 
-        # TODO: Change for ESR -- socket joint stiffness
+        # socket joint stiffness
         self.default_socket_joint_stiffnesses = {
             "socket_tx": 43500,
             "socket_ty": 43500,
@@ -125,7 +140,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         user_stiffnesses = kwargs.pop("socket_joint_stiffnesses", {}) # If provided should be dict like defult_socket_joint_stiffnesses
         self.socket_joint_stiffnesses = {**self.default_socket_joint_stiffnesses, **user_stiffnesses}
 
-        # TODO: Change for ESR -- socket joint damping
+        # socket damping
         self.default_socket_joint_dampings = {
             "socket_tx": 40,
             "socket_ty": 4,
@@ -137,7 +152,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         user_dampings = kwargs.pop("socket_joint_dampings", {}) # If provided should be dict like defult_socket_joint_dampings
         self.socket_joint_dampings = {**self.default_socket_joint_dampings, **user_dampings}
 
-        # TODO: Change for ESR -- joint socket ranges
+        # socket joint ranges
         self.default_socket_joint_ranges = {
             "socket_tx": [-0.01, 0.01],
             "socket_ty": [-0.02, 0.02],
@@ -149,7 +164,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         user_ranges = kwargs.pop("socket_joint_ranges", {}) # If provided should be dict like defult_socket_joint_ranges
         self.socket_joint_ranges = {**self.default_socket_joint_ranges, **user_ranges}
 
-        # TODO: think about it, whether changed or not -> biomechanics True
+        # NOTE: think about it, whether changed or not -> in reality slackness exists
         # Slackness of the socket joint
         self.delta_shift_slack = kwargs.pop("delta_shift_slack", 0.0) # Amount of slack in the socket joint that allows for shifting before applying forces to the body (to prevent large forces from small position changes within the socket)
         self.socket_ty_slack = kwargs.pop("socket_ty_slack", False) # Whether to add slack to the socket_ty joint to allow for vertical movement within the socket before forces are applied (to prevent large forces from small position changes within the socket in the vertical direction)
@@ -157,7 +172,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         # For evaluation add sensors 
         self.add_sensors = kwargs.pop("add_sensors", False) # Whether to add sensors to the prosthesis bodies for evaluation and visualization purposes
 
-        # TODO: Maybe in future more detailed ground contact modeling? BUT NOT AT THE MOMENT
+        # NOTE: Maybe in future more detailed ground contact modeling? BUT NOT AT THE MOMENT
         # Handle multi-contact geom options and solref
         if "multi_contact_geom_type" in kwargs:
             self.multi_contact_geom_type = kwargs.pop("multi_contact_geom_type") # Only 2boxes implemented for now
@@ -283,18 +298,18 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
             if hasattr(self, "prosthesis_subtype") and self.prosthesis_subtype == "SACH": 
                 print("Using SACH prosthesis subtype. Scaling foot and adapting body properties accordingly.")
                 spec = self.adapt_spec_with_prosthesis_adapter(spec)
-                spec = self.add_SACH_properties(spec)
+                spec = self.add_prosthesis_properties(spec)
                 if self.reattach_muscles is not None:
                     spec = self.reattach_muscles_above_amputation(spec)
 
             # ESR Subtype
-             # TODO: Adapt for ESR subtype
+             # NOTE: Adapted for ESR subtype
             if hasattr(self, "prosthesis_subtype") and self.prosthesis_subtype == "ESR": 
                 print("Using ESR prosthesis subtype. Scaling foot and adapting body properties accordingly.")
-                # spec = self.adapt_spec_with_prosthesis_adapter(spec)
-                # spec = self.add_SACH_properties(spec)
-                # if self.reattach_muscles is not None:
-                #     spec = self.reattach_muscles_above_amputation(spec)
+                spec = self.adapt_spec_with_prosthesis_adapter(spec)
+                spec = self.add_prosthesis_properties(spec)
+                if self.reattach_muscles is not None:
+                    spec = self.reattach_muscles_above_amputation(spec)
 
             return spec 
 
@@ -446,8 +461,8 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                 if g.name in {f"tibia{side}", f"fibula{side}"}:
                     g.delete()
             self.visualize_prosthesis = True
+
             # Load 3D CAD files in MUJoCo system
-            # TODO: ESR-STL file?! -> if-else structure (SACH/ESR)
             if hasattr(self, 'visualize_prosthesis') and self.visualize_prosthesis:
                 spec.add_mesh(
                     name="socket",
@@ -459,11 +474,31 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                     file="/home/naomiklumpf/loco-mujoco/loco_mujoco/models/prosthesis/meshes/pylon.stl",
                     scale=[0.001,0.001,0.001]
                 )
-                spec.add_mesh(
-                    name="sach",
-                    file="/home/naomiklumpf/loco-mujoco/loco_mujoco/models/prosthesis/meshes/sach.stl",
-                    scale=[0.001,0.001,0.001],
-                )
+
+                if self.prosthesis_subtype == "SACH":
+                    spec.add_mesh(
+                        name="sach",
+                        file="/home/naomiklumpf/loco-mujoco/loco_mujoco/models/prosthesis/meshes/sach.stl",
+                        scale=[0.001,0.001,0.001],
+                    )
+                    foot_mesh = "sach"
+                    foot_geom_name = "sach_geom"
+
+                # TODO: Change stl file to make prosthesis difference visible
+                elif self.prosthesis_subtype == "ESR":
+                    spec.add_mesh(
+                        name="esr",
+                        file="/home/naomiklumpf/loco-mujoco/loco_mujoco/models/prosthesis/meshes/sach.stl",
+                        scale=[0.001,0.001,0.001],
+                    )
+                    foot_mesh = "esr"
+                    foot_geom_name = "esr_geom"
+                
+                else:
+                    raise ValueError(
+                        f"Unknown prosthesis subtype: {self.prosthesis_subtype}"
+                    )
+                    
                 # Add loaded 3D models for socket and pylon
                 prosthetic_shank_body.add_geom(
                     name="socket_geom",
@@ -500,12 +535,11 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                     for g in toes_body.geoms:
                         g.delete()
 
-                # Add SACH prosthesis
-                # TODO: Add ESR prosthesis -> if/else
+                # Add prosthesis
                 talus_body.add_geom(
-                    name="sach_geom",
+                    name=foot_geom_name,
                     type=mujoco.mjtGeom.mjGEOM_MESH,
-                    meshname="sach",
+                    meshname=foot_mesh,
                     rgba=[0.3,0.250,0.224,1.000],
                     quat=[0.643,0,-0.766,0],
                     pos=[0.145,-0.062,0.02],
@@ -576,8 +610,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                 gravcomp=source_body.gravcomp,
             )
             # transfer mass and inertia properties from sound body to prosthesis body
-            # TODO: For ESR less mass as sound foot
-            # ESR NOTE: Carbon fiber spring blades are significantly lighter than biological flesh/bones.
+            # mass will be adjusted later to match the appropriate prosthetic parameters
             new_body.mass = source_body.mass
             new_body.ipos = source_body.ipos
             new_body.fullinertia = source_body.fullinertia
@@ -592,7 +625,6 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                 )
 
             # all biological joints copied
-            # TODO: change stiffness, damping,... for ESR
             for joint in source_body.joints:
                 new_body.add_joint(
                     name=joint.name, type=joint.type, pos=joint.pos, axis=joint.axis,
@@ -659,12 +691,12 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
 
         return spec
     
-    # TODO: Implement analogous function for ESR
-    def scale_foot_to_SACH_keep_distribution(self, spec: mujoco.MjSpec) -> mujoco.MjSpec:
+    # NOTE: changed mass and different function name for a more generell use
+    def scale_foot_mass_keep_distribution(self, spec: mujoco.MjSpec) -> mujoco.MjSpec:
         """
         Scales the mass and fullinertia of specified foot bodies to a target total mass
-        (SACH_total_mass) while maintaining the original mass distribution proportions
-        among the foot segments.
+        (self.foot_total_mass) while maintaining the original mass distribution proportions
+        among the foot segments. It works for SACH and ESR
 
         Args:
             spec: The MuJoCo MjSpec object representing the model.
@@ -706,7 +738,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                 body_name = f"{base_name}{side}"
                 body = spec.find_body(body_name)
                 # Guarantee the same mass distribution
-                new_mass = self.SACH_total_mass * mass_ratios[body_name]
+                new_mass = self.foot_total_mass * mass_ratios[body_name]
                 if body:
                     if body_name in fullinteria_dict and mass_dict[body_name] > 0:
                         body.mass = new_mass
@@ -742,24 +774,23 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                     print(f"Site '{site_name}' already exists in body '{body_name}', skipping addition.")
         return spec
     
-
-    # TODO: similar function for ESR
-    def add_SACH_properties(self, spec: mujoco.MjSpec) -> mujoco.MjSpec:
+    # TODO: ESR important -> more properties
+    def add_prosthesis_properties(self, spec: mujoco.MjSpec) -> mujoco.MjSpec:
         """
-        Adapts to foot to be like SACH foot in the prosthesis adapter in the model specification.
+        Adapts to foot to be like SACH or ESR foot in the prosthesis adapter in the model specification.
 
         Args:
             spec: The mujoco.MjSpec object to be modified.
         Returns:
-            MjSpec: The modified model specification with SACH foot added.
+            MjSpec: The modified model specification with SACH or ESR foot added.
         """
 
         # The SACH Foot has small masses and inertias so adapt the boundmass and boundinertia
         spec.compiler.boundmass = 0.00001
         spec.compiler.boundinertia = 0.00001
 
-        # Talus, Calcn, Toe:  mass, center of mass and inertia --> Scale original mass and inertia down 
-        self.scale_foot_to_SACH_keep_distribution(spec)
+        # Talus, Calcn, Toe:  mass, center of mass and inertia --> Scale original mass and inertia down (0.575 for SACH, 0.5833 for ESR)
+        self.scale_foot_mass_keep_distribution(spec)
 
         # remove joints and corresponding constraints that are irrelevant for SACH
         if self.remove_joint_names is not None:
@@ -857,7 +888,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         return spec
 
     
-
+    # TODO: ESR important: energy storage/ankle sitffness behaviour
     def adapt_joint_damping(self, spec, joint_name):        
         """
         Increases the damping of specified joints in the model specification.
@@ -871,9 +902,16 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
 
         for j in spec.joints:
             if j.name in joint_name:
-                j.damping = self.joint_damping[j.name.replace(self.prosthesis_side,'')]
+                # j.damping = self.joint_damping[j.name.replace(self.prosthesis_side,'')]
+                # Prüfen, ob prosthesis_side eine Liste ist. Wenn ja, nimm das erste Element.
+                side_str = self.prosthesis_side[0] if isinstance(self.prosthesis_side, list) else self.prosthesis_side
 
+                # Jetzt den reinen Text-String für das Ersetzen nutzen
+                j.damping = self.joint_damping[j.name.replace(side_str, '')]
+        
+        return spec
 
+    # TODO: ESR important: energy storage/ankle sitffness behaviour
     def adapt_joint_stiffness(self, spec, joint_name,side):
         """
         Increases the stiffness of specified joints in the model specification.
@@ -1133,5 +1171,6 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         Returns:
             float: The calculated cylinder radius (r) in meters.
         """
-        radius = (2*cylinder_inertia_y/body_mass)
+        # NOTE: Corrected formula
+        radius = np.sqrt(2*cylinder_inertia_y/body_mass)
         return radius
