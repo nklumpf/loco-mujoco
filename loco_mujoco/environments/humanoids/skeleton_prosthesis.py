@@ -102,29 +102,21 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                                 "'linear_elastic' or 'distal_displacement'")
             if self.ESR_model_type not in {"linear_elastic", "distal_displacement"}:
                 raise ValueError(f"Invalid ESR_model_type: '{self.ESR_model_type}'")
-            
-            # For ESR: disable native MuJoCo spring in tx/ty, Rigney force law takes over via qfrc_applied
-            if self.prosthesis_subtype == "ESR":
-                self.socket_joint_stiffnesses["socket_ty"] = 0.0
-                self.socket_joint_stiffnesses["socket_tx"] = 0.0
-                # Larger range to allow blade deflection
-                self.socket_joint_ranges["socket_ty"] = [-0.05, 0.05]
-                self.socket_joint_ranges["socket_tx"] = [-0.03, 0.03]
 
             # Linear Elastic Model
             # Stiffness of the linear spring in the linear elastic model of the ESR prosthesis based on Rigney (2018) (Table 6.1, Vari-Flex Modular)
             self.ESR_k = kwargs.pop("ESR_k", {"k_a" : -0.442, "k_b": 35.22}) # N/mm
             # Distal Displacement Model
             # Coefficients for the functions defining the force displacements relationship in the distal displacement model of the ESR prosthesis based on Rigney (2018) (Table 6.1, Vari-Flex Modular)
-            self.ESR_coeffs = kwargs.pop("ESR_coeffs", {"m": 14.47, "n": 0.14, "p": -14.34, "q": -0.84, "r": 7.80, "s": 0.78}) # N/mm, N/mm^2, N/mm, N/mm^2, N/mm, N/mm
-    
+            # self.ESR_coeffs = kwargs.pop("ESR_coeffs", {"m": 14.47, "n": 0.14, "p": -14.34, "q": -0.84, "r": 7.80, "s": 0.78}) # N/mm, N/mm^2, N/mm, N/mm^2, N/mm, N/mm
+            # Cheetah Xtreme (better mass fit?!)
+            self.ESR_coeffs = kwargs.pop("ESR_coeffs", {"m": 53.82, "n": -0.29, "p": -67.41, "q": 0.30, "r": -0.15, "s": 7.54}) # N/mm, N/mm^2, N/mm, N/mm^2, N/mm, N/mm
 
         # Socket parameters estimated from models and papers -> similar for both prosthesis types
         self.original_socket_mass = kwargs.pop("socket_mass", 0.3)  # kg
         self.original_socket_inertia = kwargs.pop("socket_inertia", [0.0136, 0.0021, 0.0136, 0, 0, 0])  # kg*m^2
         self.original_socket_relative_center_of_mass = kwargs.pop("socket_relative_center_of_mass", np.array([0, 0.0491, 0])) # meters
 
-        # TODO: Change for ESR
         # Handling joints
         self.joint_stiffness = kwargs.pop("joint_stiffness", None) # Dictionary with joint name and stiffness value
         self.joint_damping = kwargs.pop("joint_damping", None) # Dictionary with joint name and damping value
@@ -190,6 +182,14 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         user_ranges = kwargs.pop("socket_joint_ranges", {}) # If provided should be dict like defult_socket_joint_ranges
         self.socket_joint_ranges = {**self.default_socket_joint_ranges, **user_ranges}
 
+        # For ESR: disable native MuJoCo spring in tx/ty, Rigney force law takes over via qfrc_applied
+        if self.prosthesis_subtype == "ESR":
+            self.socket_joint_stiffnesses["socket_ty"] = 0.0
+            self.socket_joint_stiffnesses["socket_tx"] = 0.0
+            # Larger range to allow blade deflection
+            self.socket_joint_ranges["socket_ty"] = [-0.05, 0.05]
+            self.socket_joint_ranges["socket_tx"] = [-0.03, 0.03]
+
         # NOTE: think about it, whether changed or not -> in reality slackness exists
         # Slackness of the socket joint
         self.delta_shift_slack = kwargs.pop("delta_shift_slack", 0.0) # Amount of slack in the socket joint that allows for shifting before applying forces to the body (to prevent large forces from small position changes within the socket)
@@ -236,6 +236,36 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                          spec=spec,
                          **kwargs)
         
+        # Cache joint and site IDs for ESR force computation
+        # Avoirds repeated mj_name2id calls
+        if self.prosthesis_subtype == "ESR":
+            self.esr_joint_info = {}
+            self.pylon_site_ids = {}
+        
+            for side in self.prosthesis_side:
+                # Joint indices
+                ty_id = mujoco.mj_name2id(
+                    self._model, mujoco.mjtObj.mjOBJ_JOINT, f"socket_ty{side}"
+                )
+                tx_id = mujoco.mj_name2id(
+                    self._model, mujoco.mjtObj.mjOBJ_JOINT, f"socket_tx{side}"
+                )
+                self.esr_joint_info[side] = {
+                    "ty_qpos": self._model.jnt_qposadr[ty_id],
+                    "tx_qpos": self._model.jnt_qposadr[tx_id],
+                    "ty_dof": self._model.jnt_dofadr[ty_id],
+                    "tx_dof": self._model.jnt_dofadr[tx_id],
+                }
+                # Site indices for alpha computation
+                self.pylon_site_ids[side] = {
+                    "proximal": mujoco.mj_name2id(
+                        self._model, mujoco.mjtObj.mjOBJ_SITE, f"pylon_mimic{side}"
+                    ),
+                    "distal": mujoco.mj_name2id(
+                        self._model, mujoco.mjtObj.mjOBJ_SITE, f"talus_attachment_site_in_pylon{side}"
+                    )
+                }
+            
 
     def add_force_sensor(self, spec, site_name):
         """
@@ -800,7 +830,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                     print(f"Site '{site_name}' already exists in body '{body_name}', skipping addition.")
         return spec
     
-    # TODO: ESR important -> more properties
+
     def add_prosthesis_properties(self, spec: mujoco.MjSpec) -> mujoco.MjSpec:
         """
         Adapts to foot to be like SACH or ESR foot in the prosthesis adapter in the model specification.
@@ -849,6 +879,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
 
         return spec
     
+    # NOTE: New function to compute alpha in Rigney (2018)
     def get_pylon_alpha(self, data, side):
         """ 
         Computes pylon orientation angle alpha relative to vertical (Z-axis).
@@ -860,11 +891,8 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
 
         Source: Rigney (2018), Figure 6.1
         """
-        proximal_id = mujoco.mj_name2id(
-            self._model, mujoco.mjtObj.mjOBJ_SITE, f"pylon_mimic{side}")
-        distal_id = mujoco.mj_name2id(
-            self._model, mujoco.mjtObj.mjOBJ_SITE,
-            f"talus_attachment_site_in_pylon{side}")
+        proximal_id = self.pylon_site_ids[side]["proximal"]
+        distal_id = self.pylon_site_ids[side]["distal"]
 
         proximal_pos = data.site_xpos[proximal_id]
         distal_pos = data.site_xpos[distal_id]
@@ -873,18 +901,14 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         pylon_axis = proximal_pos - distal_pos
         pylon_axis = pylon_axis / jnp.linalg.norm(pylon_axis)
 
-        # Z is up (confirmed from gravity [0, 0, -9.81])
-        vertical = jnp.array([0.0, 0.0, 1.0])
-
-        cos_alpha = jnp.dot(pylon_axis, vertical)
         # TODO: CHECK
-        alpha = jnp.arccos(jnp.clip(cos_alpha, -1.0, 1.0))
-        alpha = jnp.arctan2(pylon_axis[0], pylon_axis[2])
-        alpha = jnp.arctan2(pylon_axis[1], pylon_axis[2])
-        alpha = jnp.clip(alpha, jnp.deg2rad(0), jnp.deg2rad(25))
+        # Sagittal plane angle (X-Z plane)
+        alpha = jnp.arctan2(pylon_axis[0], pylon_axis[2])   # rad
+        # alpha = jnp.clip(alpha, jnp.deg2rad(-25), jnp.deg2rad(25))
+        
         return alpha
     
-
+    # NOTE: New function to implement reaction force
     def compute_ESR_qfrc(self, data):
         """
         Computes generalized forces for ESR compliance DOFs.
@@ -900,24 +924,25 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
             F_Z = m * Z + n * Z^2 + p * Y + q * Z * Y
             F_Y = r * Y + s * Z
             F_z = F_Z * cos(alpha) + F_Y * sin(alpha)
-            F_y = F_Z * sin(alpha) - F_y * cos(alpha)
+            F_y = F_Z * sin(alpha) - F_Y * cos(alpha)
         """
         for side in self.prosthesis_side:
-            ty_id = mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_JOINT, f"socket_ty{side}")
-            tx_id = mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_JOINT, f"socket_tx{side}")
+            info = self.esr_joint_info[side]
 
-            z = data.qpos[self._model.jnt_qposadr[ty_id]]
-            y = data.qpos[self._model.jnt_qposadr[tx_id]]
-            z_mm = 1000 * z
-            y_mm = 1000 * y
-            ty_dof = self._model.jnt_dofadr[ty_id]
-            tx_dof = self._model.jnt_dofadr[tx_id]
+            z = data.qpos[info["ty_qpos"]] # m
+            y = data.qpos[info["tx_qpos"]] # m
+            z_mm = 1000 * z # mm
+            y_mm = 1000 * y # mm
+            ty_dof = info["ty_dof"]
+            tx_dof = info["tx_dof"]
 
             alpha = self.get_pylon_alpha(data, side)
             if self.ESR_model_type == "linear_elastic":
                 k_a = self.ESR_k["k_a"]
                 k_b = self.ESR_k["k_b"]
+                # TODO: Check whether alpha here in deg or rad
                 k   = k_a * alpha + k_b
+                # k   = k_a * jnp.rad2deg(alpha) + k_b
                 F_z = - k * z_mm
                 F_y = jnp.zeros_like(F_z)
 
@@ -933,7 +958,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                 F_z = - (F_Z * jnp.cos(alpha) + F_Y * jnp.sin(alpha))
                 F_y = - (F_Z * jnp.sin(alpha) - F_Y * jnp.cos(alpha))
 
-            # add reaction force from Rigney
+            # Add reaction force from Rigney
             data = data.replace(
                 qfrc_applied=data.qfrc_applied
                 .at[ty_dof].add(F_z)
@@ -941,7 +966,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
             )
         return data
 
-
+    # NOTE: Overwritten function to apply ESR reaction forces before the simulation step.
     def _mjx_simulation_pre_step(self, model, data, carry):
         """ 
         Injects Rigney ESR forces before each MuJoCo substep.
@@ -1024,7 +1049,6 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         return spec
 
     
-    # TODO: ESR important: energy storage/ankle sitffness behaviour
     def adapt_joint_damping(self, spec, joint_name):        
         """
         Increases the damping of specified joints in the model specification.
@@ -1047,7 +1071,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         
         return spec
 
-    # TODO: ESR important: energy storage/ankle sitffness behaviour
+
     def adapt_joint_stiffness(self, spec, joint_name,side):
         """
         Increases the stiffness of specified joints in the model specification.
