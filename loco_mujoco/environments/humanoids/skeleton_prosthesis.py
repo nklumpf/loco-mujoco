@@ -106,11 +106,12 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
             # Linear Elastic Model
             # Stiffness of the linear spring in the linear elastic model of the ESR prosthesis based on Rigney (2018) (Table 6.1, Vari-Flex Modular)
             self.ESR_k = kwargs.pop("ESR_k", {"k_a" : -0.442, "k_b": 35.22}) # N/mm
+            # self.ESR_k = kwargs.pop("ESR_k", {"k_a" : 0.229, "k_b": 19.00}) # N/mm # Cheetah Xtreme
             # Distal Displacement Model
             # Coefficients for the functions defining the force displacements relationship in the distal displacement model of the ESR prosthesis based on Rigney (2018) (Table 6.1, Vari-Flex Modular)
-            # self.ESR_coeffs = kwargs.pop("ESR_coeffs", {"m": 14.47, "n": 0.14, "p": -14.34, "q": -0.84, "r": 7.80, "s": 0.78}) # N/mm, N/mm^2, N/mm, N/mm^2, N/mm, N/mm
+            self.ESR_coeffs = kwargs.pop("ESR_coeffs", {"m": 14.47, "n": 0.14, "p": -14.34, "q": -0.84, "r": 7.80, "s": 0.78}) # N/mm, N/mm^2, N/mm, N/mm^2, N/mm, N/mm
             # Cheetah Xtreme (better mass fit?!)
-            self.ESR_coeffs = kwargs.pop("ESR_coeffs", {"m": 53.82, "n": -0.29, "p": -67.41, "q": 0.30, "r": -0.15, "s": 7.54}) # N/mm, N/mm^2, N/mm, N/mm^2, N/mm, N/mm
+            # self.ESR_coeffs = kwargs.pop("ESR_coeffs", {"m": 53.82, "n": -0.29, "p": -67.41, "q": 0.30, "r": -0.15, "s": 7.54}) # N/mm, N/mm^2, N/mm, N/mm^2, N/mm, N/mm
 
         # Socket parameters estimated from models and papers -> similar for both prosthesis types
         self.original_socket_mass = kwargs.pop("socket_mass", 0.3)  # kg
@@ -198,7 +199,6 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         # For evaluation add sensors 
         self.add_sensors = kwargs.pop("add_sensors", False) # Whether to add sensors to the prosthesis bodies for evaluation and visualization purposes
 
-        # NOTE: Maybe in future more detailed ground contact modeling? BUT NOT AT THE MOMENT
         # Handle multi-contact geom options and solref
         if "multi_contact_geom_type" in kwargs:
             self.multi_contact_geom_type = kwargs.pop("multi_contact_geom_type") # Only 2boxes implemented for now
@@ -913,8 +913,8 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         """
         Computes generalized forces for ESR compliance DOFs.
 
-        socket_ty = Z (vertical displacement, Rigney 2018)
-        socket_tx = Y (anterior-posterior displacement, Rigney 2018)
+        socket_ty = z (vertical displacement, Rigney 2018)
+        socket_tx = y (anterior-posterior displacement, Rigney 2018)
 
         Linear Elastic Model (Rigney 2018, Eq. 6.2? Or 6.3?):
             F_z = k * z
@@ -940,9 +940,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
             if self.ESR_model_type == "linear_elastic":
                 k_a = self.ESR_k["k_a"]
                 k_b = self.ESR_k["k_b"]
-                # TODO: Check whether alpha here in deg or rad
-                k   = k_a * alpha + k_b
-                # k   = k_a * jnp.rad2deg(alpha) + k_b
+                k   = k_a * jnp.rad2deg(alpha) + k_b
                 F_z = - k * z_mm
                 F_y = jnp.zeros_like(F_z)
 
@@ -953,8 +951,10 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                 q = self.ESR_coeffs["q"]
                 r = self.ESR_coeffs["r"]
                 s = self.ESR_coeffs["s"]
-                F_Z = m*z_mm + n*z_mm**2 + p*y_mm + q*z_mm*y_mm
-                F_Y = r*y_mm + s*z_mm
+                Z_mm =  z_mm * jnp.cos(alpha) + y_mm * jnp.sin(alpha)
+                Y_mm =  -z_mm * jnp.sin(alpha) + y_mm * jnp.cos(alpha)
+                F_Z = m*Z_mm + n*Z_mm**2 + p*Y_mm + q*Z_mm*Y_mm
+                F_Y = r*Y_mm + s*Z_mm
                 F_z = - (F_Z * jnp.cos(alpha) + F_Y * jnp.sin(alpha))
                 F_y = - (F_Z * jnp.sin(alpha) - F_Y * jnp.cos(alpha))
 
