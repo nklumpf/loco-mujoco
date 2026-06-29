@@ -9,6 +9,7 @@ from loco_mujoco.environments.base import  LocoCarry
 import jax.numpy as jnp
 from loco_mujoco.core.utils import info_property
 from collections.abc import Mapping
+from scipy.spatial.transform import Rotation
 
 
 
@@ -89,29 +90,38 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
             # From literature for specific foot size (based on amputee height)
             self.foot_total_mass = self.SACH_total_mass
 
-        # NOTE: ESR Data (mass) and ESR_model_type added
+        # TODO: ESR Data (mass) and ESR_model_type added????
         # Define parameters for ESR prosthesis
         if hasattr(self, "prosthesis_subtype") and self.prosthesis_subtype == "ESR":
-            self.ESR_total_mass = kwargs.pop("ESR_total_mass", 0.779)  # kg # From Vari-Flex based on Vari-Flex Modular Catalog page (weight with pyramid and foot cover)
+            self.ESR_total_mass = kwargs.pop("ESR_total_mass", 0.594)   # kg # From Vari-Flex based on Vari-Flex Catalog page (weight with pyramid and foot cover)
+            self.ESR_rearfoot_mass = 0.6 * self.ESR_total_mass          # 0.356 kg
+            self.ESR_forefoot_mass = 0.4 * self.ESR_total_mass          # 0.238 kg
             self.foot_total_mass = self.ESR_total_mass
-            # Check whether model type is defined which specifies whether der ESR is modeled with the linear elastic model or the distal displacement model as explained in Rigney (2018): Mathematical modelling of energy storage and return prostheses
-            # TODO: Define default model_type?
-            self.ESR_model_type = kwargs.pop("ESR_model_type", None) # Should be either "linear_elastic" or "distal_displacement"
-            if self.ESR_model_type is None:
-                raise ValueError("ESR prosthesis requires a 'ESR_model_type':"
-                                "'linear_elastic' or 'distal_displacement'")
-            if self.ESR_model_type not in {"linear_elastic", "distal_displacement"}:
-                raise ValueError(f"Invalid ESR_model_type: '{self.ESR_model_type}'")
 
-            # Linear Elastic Model
-            # Stiffness of the linear spring in the linear elastic model of the ESR prosthesis based on Rigney (2018) (Table 6.1, Vari-Flex Modular)
-            self.ESR_k = kwargs.pop("ESR_k", {"k_a" : -0.442, "k_b": 35.22}) # N/mm
-            # self.ESR_k = kwargs.pop("ESR_k", {"k_a" : 0.229, "k_b": 19.00}) # N/mm # Cheetah Xtreme
-            # Distal Displacement Model
-            # Coefficients for the functions defining the force displacements relationship in the distal displacement model of the ESR prosthesis based on Rigney (2018) (Table 6.1, Vari-Flex Modular)
-            self.ESR_coeffs = kwargs.pop("ESR_coeffs", {"m": 14.47, "n": 0.14, "p": -14.34, "q": -0.84, "r": 7.80, "s": 0.78}) # N/mm, N/mm^2, N/mm, N/mm^2, N/mm, N/mm
-            # Cheetah Xtreme (better mass fit?!)
-            # self.ESR_coeffs = kwargs.pop("ESR_coeffs", {"m": 53.82, "n": -0.29, "p": -67.41, "q": 0.30, "r": -0.15, "s": 7.54}) # N/mm, N/mm^2, N/mm, N/mm^2, N/mm, N/mm
+            L = kwargs.pop("ESR_FJC_distance", 0.128)                   # m, Lecomte
+            k_lin = kwargs.pop("ESR_k_lin", 30000.0)                    # N/m 
+            self.ESR_k_theta = k_lin * L**2                             # Nm/rad
+            self.ESR_c_theta = kwargs.pop("ESR_c_theta", 0.0)
+
+            # NOTE: OLD MODEL TYPE
+            # # Check whether model type is defined which specifies whether der ESR is modeled with the linear elastic model or the distal displacement model as explained in Rigney (2018): Mathematical modelling of energy storage and return prostheses
+            # # TODO: Define default model_type?
+            # self.ESR_model_type = kwargs.pop("ESR_model_type", None) # Should be either "linear_elastic" or "distal_displacement"
+            # if self.ESR_model_type is None:
+            #     raise ValueError("ESR prosthesis requires a 'ESR_model_type':"
+            #                     "'linear_elastic' or 'distal_displacement'")
+            # if self.ESR_model_type not in {"linear_elastic", "distal_displacement"}:
+            #     raise ValueError(f"Invalid ESR_model_type: '{self.ESR_model_type}'")
+
+            # # Linear Elastic Model
+            # # Stiffness of the linear spring in the linear elastic model of the ESR prosthesis based on Rigney (2018) (Table 6.1, Vari-Flex Modular)
+            # self.ESR_k = kwargs.pop("ESR_k", {"k_a" : -0.442, "k_b": 35.22, "zeta_1": 1.5}) # N/mm
+            # # self.ESR_k = kwargs.pop("ESR_k", {"k_a" : 0.229, "k_b": 19.00, "zeta_1": 1.5}) # N/mm # Cheetah Xtreme
+            # # Distal Displacement Model
+            # # Coefficients for the functions defining the force displacements relationship in the distal displacement model of the ESR prosthesis based on Rigney (2018) (Table 6.1, Vari-Flex Modular)
+            # self.ESR_coeffs = kwargs.pop("ESR_coeffs", {"m": 14.47, "n": 0.14, "p": -14.34, "q": -0.84, "r": 7.80, "s": 0.78}) # N/mm, N/mm^2, N/mm, N/mm^2, N/mm, N/mm
+            # # Cheetah Xtreme (better mass fit?!)
+            # # self.ESR_coeffs = kwargs.pop("ESR_coeffs", {"m": 53.82, "n": -0.29, "p": -67.41, "q": 0.30, "r": -0.15, "s": 7.54}) # N/mm, N/mm^2, N/mm, N/mm^2, N/mm, N/mm
 
         # Socket parameters estimated from models and papers -> similar for both prosthesis types
         self.original_socket_mass = kwargs.pop("socket_mass", 0.3)  # kg
@@ -238,34 +248,46 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         
         # Cache joint and site IDs for ESR force computation
         # Avoirds repeated mj_name2id calls
-        if self.prosthesis_subtype == "ESR":
-            self.esr_joint_info = {}
-            self.pylon_site_ids = {}
+        # if self.prosthesis_subtype == "ESR":
+        #     self.esr_joint_info = {}
+        #     self.pylon_site_ids = {}
         
+        #     for side in self.prosthesis_side:
+        #         # Joint indices
+        #         ty_id = mujoco.mj_name2id(
+        #             self._model, mujoco.mjtObj.mjOBJ_JOINT, f"socket_ty{side}"
+        #         )
+        #         tx_id = mujoco.mj_name2id(
+        #             self._model, mujoco.mjtObj.mjOBJ_JOINT, f"socket_tx{side}"
+        #         )
+        #         self.esr_joint_info[side] = {
+        #             "ty_qpos": self._model.jnt_qposadr[ty_id],
+        #             "tx_qpos": self._model.jnt_qposadr[tx_id],
+        #             "ty_dof": self._model.jnt_dofadr[ty_id],
+        #             "tx_dof": self._model.jnt_dofadr[tx_id],
+        #         }
+        #         # Site indices for alpha computation
+        #         self.pylon_site_ids[side] = {
+        #             "proximal": mujoco.mj_name2id(
+        #                 self._model, mujoco.mjtObj.mjOBJ_SITE, f"pylon_mimic{side}"
+        #             ),
+        #             "distal": mujoco.mj_name2id(
+        #                 self._model, mujoco.mjtObj.mjOBJ_SITE, f"talus_attachment_site_in_pylon{side}"
+        #             )
+        #         }
+
+        # Cache hinge IDs
+        if self.prosthesis_subtype == "ESR":
+            self.esr_hinge_info = {}
             for side in self.prosthesis_side:
-                # Joint indices
-                ty_id = mujoco.mj_name2id(
-                    self._model, mujoco.mjtObj.mjOBJ_JOINT, f"socket_ty{side}"
+                hinge_id = mujoco.mj_name2id(
+                    self._model, mujoco.mjtObj.mjOBJ_JOINT, f"esr_hinge{side}"
                 )
-                tx_id = mujoco.mj_name2id(
-                    self._model, mujoco.mjtObj.mjOBJ_JOINT, f"socket_tx{side}"
-                )
-                self.esr_joint_info[side] = {
-                    "ty_qpos": self._model.jnt_qposadr[ty_id],
-                    "tx_qpos": self._model.jnt_qposadr[tx_id],
-                    "ty_dof": self._model.jnt_dofadr[ty_id],
-                    "tx_dof": self._model.jnt_dofadr[tx_id],
+                self.esr_hinge_info[side] = {
+                    "hinge_qpos": self._model.jnt_qposadr[hinge_id],
+                    "hinge_dof":  self._model.jnt_dofadr[hinge_id],
                 }
-                # Site indices for alpha computation
-                self.pylon_site_ids[side] = {
-                    "proximal": mujoco.mj_name2id(
-                        self._model, mujoco.mjtObj.mjOBJ_SITE, f"pylon_mimic{side}"
-                    ),
-                    "distal": mujoco.mj_name2id(
-                        self._model, mujoco.mjtObj.mjOBJ_SITE, f"talus_attachment_site_in_pylon{side}"
-                    )
-                }
-            
+                            
 
     def add_force_sensor(self, spec, site_name):
         """
@@ -560,20 +582,20 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                     name="socket_geom",
                     type=mujoco.mjtGeom.mjGEOM_MESH,
                     meshname="socket",
-                    rgba=[0.5, 0.5, 0.5, 1], #[1, 0, 0, 1], # Bright Red
-                    euler=[0, 0.0, 1.571], # Rotate to be vertical if it's currently horizontal
+                    rgba=[0.5, 0.5, 0.5, 1],    #[1, 0, 0, 1], # Bright Red
+                    euler=[0, 0.0, 1.571],      # Rotate to be vertical if it's currently horizontal
                     pos=[0,-0.05,0],
-                    group=0,            # Ensure it's in a visible group
+                    group=0,                    # Ensure it's in a visible group
                     mass = socket_params["socket_mass"]
                 )
                 prosthetic_shank_body.add_geom(
                     name="pylon_geom",
                     type=mujoco.mjtGeom.mjGEOM_MESH,
                     meshname="pylon",
-                    rgba=[0.5, 0.5, 0.5, 1], #[1, 0, 0, 1], # Bright Blue
-                    euler=[0, 0.0, 1.571], # Rotate to be vertical if it's currently horizontal
+                    rgba=[0.5, 0.5, 0.5, 1],    #[1, 0, 0, 1], # Bright Blue
+                    euler=[0, 0.0, +1.571],      # Rotate to be vertical if it's currently horizontal
                     pos=[0, -0.05, 0],
-                    group=0            # Ensure it's in a visible group
+                    group=0                     # Ensure it's in a visible group
                 )
 
                 # Delete the sound foot
@@ -592,15 +614,86 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                         g.delete()
 
                 # Add prosthesis
-                talus_body.add_geom(
-                    name=foot_geom_name,
-                    type=mujoco.mjtGeom.mjGEOM_MESH,
-                    meshname=foot_mesh,
-                    rgba=[0.3,0.250,0.224,1.000],
-                    quat=[0.643,0,-0.766,0],
-                    pos=[0.145,-0.062,0.02],
-                    group=0
+                # talus_body.add_geom(
+                #     name=foot_geom_name,
+                #     type=mujoco.mjtGeom.mjGEOM_MESH,
+                #     meshname=foot_mesh,
+                #     rgba=[0.3,0.250,0.224,1.000],
+                #     quat=[0.643,0,-0.766,0],
+                #     pos=[0.145,-0.062,0.02],
+                #     group=0
+                #     )
+                
+                # TODO: CHECK
+                if self.prosthesis_subtype == "ESR":
+                    # Use talus body as proximal attachment body for ESR foot (not anatomical talus)
+                    # Rearfoot is directly attached to the pylon
+                    rearfoot_body = talus_body
+                    rearfoot_body.mass = self.ESR_rearfoot_mass
+                    geom_pos = np.array([-0.011, 0.0232, -0.005])          # geom position
+                    com_offset_geom = np.array([0.003, -0.001, 0.0])       # COM is (3,-1,0) mm shifted compared to center of geom
+                    q = [0.643, 0, -0.766, 0]                              # rotation
+                    # Rotation of COM coordinates
+                    r = Rotation.from_quat([q[1], q[2], q[3], q[0]])
+                    com_offset_body = r.apply(com_offset_geom)
+                    rearfoot_body.ipos = geom_pos + com_offset_body
+
+                    # Rearfoot visualization box
+                    # COM from heel: (67,84,0)mm. Size: (128,170,85)mm
+                    # Connection to pylon ca 75mm from heel
+                    rearfoot_body.add_geom(
+                        name=f"esr_rearfoot_geom{side}",
+                        type=mujoco.mjtGeom.mjGEOM_BOX,
+                        size=[0.0425, 0.085,  0.064],  
+                        pos=[-0.011, 0.0232, -0.005],   # x: front/back, - back; y: up/down; # z: left/right
+                        rgba=[0.3, 0.3, 0.8, 0.5], 
+                        quat=[0.643,0,-0.766,0],        # Rotation same as talus in visualization
+                        contype=0,                      # No contact
+                        conaffinity=0
                     )
+
+                    # Forefoot as new children body
+                    forefoot_body = rearfoot_body.add_body(
+                        name=f"esr_forefoot{side}", 
+                        pos=[0.053,-0.0343,0.0],  # FJC from Lecomte # 53mm in x-direction from Pylon point
+                        quat=[0.643, 0, -0.766, 0],
+                    )
+
+                    # ESR-Hinge joint
+                    forefoot_body.add_joint(
+                        name=f"esr_hinge{side}",
+                        type=mujoco.mjtJoint.mjJNT_HINGE,
+                        axis=[1,0,0],            
+                        stiffness=0.0,           
+                        damping=0.0,
+                        range=[-0.7,0.7]
+                    )
+
+                    # Forefoot visualization box
+                    # COM from heel: (180,18,0)mm. Size: (147,50,85)mm
+                    forefoot_body.add_geom(
+                        name=f"esr_forefoot_geom{side}",
+                        type=mujoco.mjtGeom.mjGEOM_BOX,
+                        size=[0.0425,0.025, 0.0735], # x: left/right, y: up/down, z: front/back
+                        pos=[0.005,-0.0025,-0.0735],  
+                        rgba=[0.8,0.3,0.2,0.5]
+                    )
+                    forefoot_body.mass = self.ESR_forefoot_mass
+                    forefoot_body.ipos = np.array([0.005, -0.0025-0.007, -0.0735+0.0215])  # COM is (0,-7,-21.5)mm shifted compared to geom center
+
+                    rearfoot_body.add_site(
+                        name=f"esr_rearfoot_COM{side}",
+                        pos=rearfoot_body.ipos,
+                        size=[0.01, 0.01, 0.01],
+                        rgba=[1, 1, 0, 1]  # gelb
+                    )
+                    forefoot_body.add_site(
+                        name=f"esr_forefoot_COM{side}",
+                        pos=forefoot_body.ipos,
+                        size=[0.01, 0.01, 0.01],
+                        rgba=[1, 1, 0, 1]  # gelb
+                    )
+  
 
         socket_joint_offset = (1 / 3) * amputated_tibia_length
 
@@ -614,7 +707,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
 
                 joint_name = f"socket_{joint_type}{side}"
 
-                # of displacement -> slide joint, if rotation -> hinge joint
+                # displacement -> slide joint, if rotation -> hinge joint
                 is_slide = joint_type in {"tx", "ty", "tz"}
                 joint_type_enum = mujoco.mjtJoint.mjJNT_SLIDE if is_slide else mujoco.mjtJoint.mjJNT_HINGE
                 
@@ -846,7 +939,8 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         spec.compiler.boundinertia = 0.00001
 
         # Talus, Calcn, Toe:  mass, center of mass and inertia --> Scale original mass and inertia down (0.575 for SACH, 0.5833 for ESR)
-        self.scale_foot_mass_keep_distribution(spec)
+        if self.prosthesis_subtype == "SACH":
+            self.scale_foot_mass_keep_distribution(spec)
 
         # remove joints and corresponding constraints that are irrelevant for SACH
         if self.remove_joint_names is not None:
@@ -879,92 +973,104 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
 
         return spec
     
-    # NOTE: New function to compute alpha in Rigney (2018)
-    def get_pylon_alpha(self, data, side):
-        """ 
-        Computes pylon orientation angle alpha relative to vertical (Z-axis).
-        Uses proximal/distal sites to define the mechanical pylon axis.
 
-        Coordinate system confirmed:
-        - Gravity: [0,0,-9.81] -> Z is vertical axis
-        - Pylon longitudinal axis: Z (confirmed from site positions)
-
-        Source: Rigney (2018), Figure 6.1
+    def compute_ESR_hinge_qfrc(self, data):
         """
-        proximal_id = self.pylon_site_ids[side]["proximal"]
-        distal_id = self.pylon_site_ids[side]["distal"]
+        Computes torque to apply in the ESR hinge joint.
 
-        proximal_pos = data.site_xpos[proximal_id]
-        distal_pos = data.site_xpos[distal_id]
-
-        # Mechanical pylon axis
-        pylon_axis = proximal_pos - distal_pos
-        pylon_axis = pylon_axis / jnp.linalg.norm(pylon_axis)
-
-        # TODO: CHECK
-        # Sagittal plane angle (X-Z plane)
-        alpha = jnp.arctan2(pylon_axis[0], pylon_axis[2])   # rad
-        # alpha = jnp.clip(alpha, jnp.deg2rad(-25), jnp.deg2rad(25))
-        
-        return alpha
-    
-    # NOTE: New function to implement reaction force
-    def compute_ESR_qfrc(self, data):
-        """
-        Computes generalized forces for ESR compliance DOFs.
-
-        socket_ty = z (vertical displacement, Rigney 2018)
-        socket_tx = y (anterior-posterior displacement, Rigney 2018)
-
-        Linear Elastic Model (Rigney 2018, Eq. 6.2? Or 6.3?):
-            F_z = k * z
-            k   = k_a * alpha + k_b
-
-        Distal Displacement Model (Rigney 2018, Eq. 6.5)
-            F_Z = m * Z + n * Z^2 + p * Y + q * Z * Y
-            F_Y = r * Y + s * Z
-            F_z = F_Z * cos(alpha) + F_Y * sin(alpha)
-            F_y = F_Z * sin(alpha) - F_Y * cos(alpha)
+        Linear Model (Rigney 2018, Eq. 6.2 or 6.3):
+            z: vertical compression of the prosthesis
+            theta: angle of hinge joint
+            tau     = - k_theta * theta                     # torque
+            k_theta = k_lin * L^2                           # k_lin: linear stiffness (F_z = -k_lin*z), L: lever
         """
         for side in self.prosthesis_side:
-            info = self.esr_joint_info[side]
-
-            z = data.qpos[info["ty_qpos"]] # m
-            y = data.qpos[info["tx_qpos"]] # m
-            z_mm = 1000 * z # mm
-            y_mm = 1000 * y # mm
-            ty_dof = info["ty_dof"]
-            tx_dof = info["tx_dof"]
-
-            alpha = self.get_pylon_alpha(data, side)
-            if self.ESR_model_type == "linear_elastic":
-                k_a = self.ESR_k["k_a"]
-                k_b = self.ESR_k["k_b"]
-                k   = k_a * jnp.rad2deg(alpha) + k_b
-                F_z = - k * z_mm
-                F_y = jnp.zeros_like(F_z)
-
-            elif self.ESR_model_type == "distal_displacement":
-                m = self.ESR_coeffs["m"]
-                n = self.ESR_coeffs["n"]
-                p = self.ESR_coeffs["p"]
-                q = self.ESR_coeffs["q"]
-                r = self.ESR_coeffs["r"]
-                s = self.ESR_coeffs["s"]
-                Z_mm =  z_mm * jnp.cos(alpha) + y_mm * jnp.sin(alpha)
-                Y_mm =  -z_mm * jnp.sin(alpha) + y_mm * jnp.cos(alpha)
-                F_Z = m*Z_mm + n*Z_mm**2 + p*Y_mm + q*Z_mm*Y_mm
-                F_Y = r*Y_mm + s*Z_mm
-                F_z = - (F_Z * jnp.cos(alpha) + F_Y * jnp.sin(alpha))
-                F_y = - (F_Z * jnp.sin(alpha) - F_Y * jnp.cos(alpha))
-
-            # Add reaction force from Rigney
+            hinge_id = self.esr_hinge_info[side]["hinge_dof"]
+            theta = data.qpos[self.esr_hinge_info[side]["hinge_qpos"]]
+            theta_dot = data.qvel[hinge_id]
+            
+            k_theta = self.ESR_k_theta  # k_lin * L^2
+            #c_theta = self.ESR_c_theta
+            tau = -k_theta * theta# - c_theta * theta_dot
+            
             data = data.replace(
-                qfrc_applied=data.qfrc_applied
-                .at[ty_dof].add(F_z)
-                .at[tx_dof].add(F_y)
+                qfrc_applied=data.qfrc_applied.at[hinge_id].add(tau)
             )
         return data
+
+
+    # # NOTE: DELETE??? New function to implement reaction force
+    # def compute_ESR_qfrc(self, data):
+    #     """
+    #     Computes generalized forces for ESR compliance DOFs.
+
+    #     Linear Elastic Model (Rigney 2018, Eq. 6.2 or 6.3):
+    #         z: vertical compression of the prosthesis
+    #         F_z = k * z
+    #         k   = k_a * alpha + k_b
+
+    #     # TODO: Implement really distal end displacement?!
+    #     Distal Displacement Model (Rigney 2018, Eq. 6.5)
+    #         z: distal end vertical displacement, Rigney 2018
+    #         y: distal end horizontal displacement, Rigney 2018
+    #         F_Z = m * Z + n * Z^2 + p * Y + q * Z * Y
+    #         F_Y = r * Y + s * Z
+    #         F_z = F_Z * cos(alpha) + F_Y * sin(alpha)
+    #         F_y = F_Z * sin(alpha) - F_Y * cos(alpha)
+    #     """
+    #     for side in self.prosthesis_side:
+    #         info = self.esr_joint_info[side]
+
+    #         z = -data.qpos[info["ty_qpos"]] # m
+    #         y = -data.qpos[info["tx_qpos"]] # m
+    #         z_mm = 1000 * z # mm
+    #         y_mm = 1000 * y # mm
+    #         ty_dof = info["ty_dof"]
+    #         tx_dof = info["tx_dof"]
+
+    #         alpha = self.get_pylon_alpha(data, side)
+    #         # Reaction force implementation of linear elastic model
+    #         if self.ESR_model_type == "linear_elastic":
+    #             z_dot = data.qvel[info["ty_dof"]]
+
+    #             k_a = self.ESR_k["k_a"]
+    #             k_b = self.ESR_k["k_b"]
+    #             k   = k_a * jnp.rad2deg(alpha) + k_b
+
+    #             # 1 DOF basic model
+    #             # F_z = k * z_mm
+
+    #             # linear elastic model
+    #             zeta_1 = self.ESR_k["zeta_1"]
+    #             F_z = (1 + zeta_1 * jnp.sign(z_dot)) * k * z_mm
+
+    #             # F_y is not considered in this model
+    #             F_y = jnp.zeros_like(F_z)
+
+    #         # Reaction force implementiation of distal displacement model
+    #         elif self.ESR_model_type == "distal_displacement":
+    #             m = self.ESR_coeffs["m"]
+    #             n = self.ESR_coeffs["n"]
+    #             p = self.ESR_coeffs["p"]
+    #             q = self.ESR_coeffs["q"]
+    #             r = self.ESR_coeffs["r"]
+    #             s = self.ESR_coeffs["s"]
+    #             # Rotation (y,z) -> (Y,Z)
+    #             Z_mm =  z_mm * jnp.cos(alpha) + y_mm * jnp.sin(alpha)
+    #             Y_mm =  -z_mm * jnp.sin(alpha) + y_mm * jnp.cos(alpha)
+    #             F_Z = m*Z_mm + n*Z_mm**2 + p*Y_mm + q*Z_mm*Y_mm
+    #             F_Y = r*Y_mm + s*Z_mm
+    #             # Rotation (Y,Z) -> (z,y)
+    #             F_z = F_Z * jnp.cos(alpha) + F_Y * jnp.sin(alpha)
+    #             F_y = F_Z * jnp.sin(alpha) - F_Y * jnp.cos(alpha)
+
+    #         # Add reaction force from Rigney
+    #         data = data.replace(
+    #             qfrc_applied=data.qfrc_applied
+    #             .at[ty_dof].add(F_z)
+    #             .at[tx_dof].add(F_y)
+    #         )
+    #     return data
 
     # NOTE: Overwritten function to apply ESR reaction forces before the simulation step.
     def _mjx_simulation_pre_step(self, model, data, carry):
@@ -981,7 +1087,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         """
         model, data, carry = super()._mjx_simulation_pre_step(model, data, carry)
         if self.prosthesis_subtype == "ESR":
-            data = self.compute_ESR_qfrc(data)
+            data = self.compute_ESR_hinge_qfrc(data)
         return model, data, carry
 
 
