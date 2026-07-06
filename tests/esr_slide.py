@@ -36,6 +36,7 @@ import mujoco.viewer
 import numpy as np
 import matplotlib.pyplot as plt
 import time
+from pathlib import Path
 
 #=============================================================
 # PARAMETERS
@@ -44,7 +45,7 @@ sim_time = 10.0     # [s]
 dt       = 0.001    # [s]
 
 k_lin    = 10000    # linear stiffness value [N/m]
-# TODO: Add damping? More stable in xml-File
+# NOTE: Add damping? More stable in xml-File
 c_lin    = 0        # damping value          [Ns/m]
 
 # Initial conditions
@@ -350,7 +351,8 @@ axes[2, 1].legend()
 axes[2, 1].grid()
  
 plt.tight_layout()
-plt.savefig("esr_slide.png", dpi=150)
+script_dir = Path(__file__).parent.resolve()
+plt.savefig(script_dir / "esr_slide.png", dpi=150)
 print("Saved: esr_slide.png")
 
 

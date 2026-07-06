@@ -39,6 +39,7 @@ import mujoco.viewer
 import numpy as np
 import matplotlib.pyplot as plt
 import time as time_module
+from pathlib import Path
 
 # ============================================================
 # PARAMETERS
@@ -358,7 +359,8 @@ axes[2, 1].legend()
 axes[2, 1].grid()
 
 plt.tight_layout()
-plt.savefig("esr_hinge.png", dpi=150)
+script_dir = Path(__file__).parent.resolve()
+plt.savefig(script_dir / "esr_hinge.png", dpi=150)
 print("Saved: esr_hinge.png")
 
 
