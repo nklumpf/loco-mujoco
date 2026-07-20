@@ -29,7 +29,7 @@ axes[0].plot(df_heel['Displacement'], df_heel['Load'],
 # Plot non-linear fit
 x_h = np.linspace(0, df_heel['Displacement'].max(), 100)
 axes[0].plot(x_h, quad_func(x_h, *popt_h), color='darkblue', linewidth=2, 
-             label=f'Non-linear Fit: {popt_h[0]:.3f}$x^2$ + {popt_h[1]:.3f}$x$')
+             label=f'Non-linear Fit: {popt_h[0]:.6f}$x^2$ + {popt_h[1]:.6f}$x$')
 
 axes[0].set_title('Heel Stiffness')
 axes[0].set_xlabel('Displacement [mm]')
@@ -44,7 +44,7 @@ axes[1].plot(df_keel['Displacement'], df_keel['Load'],
 # Plot non-linear fit
 x_k = np.linspace(0, df_keel['Displacement'].max(), 100)
 axes[1].plot(x_k, quad_func(x_k, *popt_k), color='darkred', linewidth=2, 
-             label=f'Non-linear Fit: {popt_k[0]:.3f}$x^2$ + {popt_k[1]:.3f}$x$')
+             label=f'Non-linear Fit: {popt_k[0]:.6f}$x^2$ + {popt_k[1]:.6f}$x$')
 
 axes[1].set_title('Keel Stiffness')
 axes[1].set_xlabel('Displacement [mm]')

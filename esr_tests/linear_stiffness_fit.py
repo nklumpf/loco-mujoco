@@ -104,25 +104,18 @@ k_adamczyk_combined = (k_adamczyk_heel + k_adamczyk_keel) / 2
 
 # ── Print Stiffness Values ───────────────────────────────
 print(f"\n======================= Linear Heel Stiffness =======================")
-print(f"Variflex XC:   k_heel       = {k_heel:.3f} N/mm  (Lecomte)")
+print(f"Variflex XC:   k_heel       = {k_heel:.4f} N/mm  (Lecomte)")
 print(f"Variflex:      k_heel       = {k_turner_heel:.3f} N/mm  (Turner)")
 print(f"Variflex: 90kg k_heel       = {k_adamczyk_heel:.3f} N/mm  (Adamczyk)")
 print(f"LP Variflex:   k_heel       = {k_heel_27:.3f} N/mm  (Tacca interpolated)")
 print(f"LP Variflex:   k_heel       = {k_heel_27_ws:.3f} N/mm  (Tacca interpolated, without shoe)")
 
 print(f"\n======================= Linear Keel Stiffness =======================")
-print(f"Variflex XC:   k_keel       = {k_keel:.3f} N/mm  (Lecomte)")
+print(f"Variflex XC:   k_keel       = {k_keel:.4f} N/mm  (Lecomte)")
 print(f"Variflex:      k_keel       = {k_turner_keel:.3f} N/mm  (Turner)")
 print(f"Variflex: 90kg k_keel       = {k_adamczyk_keel:.3f} N/mm  (Adamczyk)")
 print(f"LP Variflex:   k_keel       = {k_keel_27:.3f} N/mm  (Tacca interpolated)")
 print(f"LP Variflex:   k_keel       = {k_keel_27_ws:.3f} N/mm  (Tacca interpolated, without shoe)")
-
-print(f"\n======================= Linear Combined Stiffness =======================")
-print(f"Variflex XC:   k_combined   = {k_combined:.3f} N/mm  (Lecomte)")
-print(f"Variflex:      k_combined   = {k_turner_combined:.3f} N/mm  (Turner)")
-print(f"Variflex: 90kg k_combined   = {k_adamczyk_combined:.3f} N/mm  (Adamczyk)")
-print(f"LP Variflex:   k_combined   = {k_combined_27:.3f} N/mm  (Tacca interpolated)")
-print(f"LP Variflex:   k_combined   = {k_combined_27_ws:.3f} N/mm  (Tacca interpolated, without shoe)")
 
 # ── Plot ─────────────────────────────────────────────────────────
 fig, axes = plt.subplots(1, 2, figsize=(15, 6), sharey=True)

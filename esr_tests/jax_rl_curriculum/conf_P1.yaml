@@ -1,0 +1,181 @@
+defaults:
+  - override hydra/job_logging: default
+  - override hydra/launcher: basic
+
+
+wandb:
+  project: deepmimic
+  run_name: RightAmp_ESRFoot_P1
+experiment:
+  task_factory:
+    name: ImitationFactory
+    params:
+      default_dataset_conf:
+        task: walk
+  env_params:
+    env_name: MjxSkeletonMuscleProsthesis
+    prosthesis_side: right
+    prosthesis_type: transtibial
+    amputated_tibia_length: 0.2
+    prosthesis_subtype: ESR
+    remove_joint_names:
+    - subtalar_angle
+    tibia_socket_offset: [0,0,0]
+    tibia_socket_overlap: 0.2
+    # joint_stiffness:
+    #   ankle_angle: 900
+    reattach_muscles: 
+      med_gas:
+      - 0
+      - 0
+      - 0
+    socket_ty_slack: True 
+    adapt_joint_range:
+      ankle_angle_l:
+      - -20
+      - 20
+      hip_flexion_r:
+      - -30
+      - 35
+      hip_flexion_l:
+      - -30
+      - 35
+      knee_angle_r:
+      - -120
+      - 5
+      knee_angle_l:
+      - -120
+      - 5
+      esr_hinge_r:     
+      - -6
+      - 14
+    multi_contact_geom_type: 2boxes
+    contact_geom_solref:
+    - -900
+    - -300
+    add_pos_ori_to_observation: true 
+    headless: true
+    disable_arms: false
+    horizon: 1000
+    goal_type: GoalTrajMimic
+    goal_params:
+      visualize_goal: true
+    control_type: ${control_config.torque_control.control_type}
+    control_params: ${control_config.torque_control.control_params}
+    reward_type: ProsthesisReward
+    reward_params:
+      qpos_w_sum: 0.4
+      qvel_w_sum: 0.2
+      rpos_w_sum: 0.5
+      rquat_w_sum: 0.3
+      rvel_w_sum: 0.1
+      action_coeff: 0.008
+      sites_for_mimic:
+      - upper_body_mimic
+      - left_hand_mimic
+      - left_knee_mimic
+      - left_foot_mimic
+      - right_hand_mimic
+      - right_knee_mimic
+      - right_foot_mimic
+  hidden_layers:
+  - 512
+  - 256
+  lr: 0.0001
+  num_envs: 2048
+  num_steps: 200
+  total_timesteps: 1500000000
+  result_dir: None
+  update_epochs: 4
+  proportion_env_reward: 0
+  num_minibatches: 32
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  init_std: 0.2
+  learnable_std: true
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  activation: tanh
+  anneal_lr: false
+  weight_decay: 0.0
+  normalize_env: true
+  debug: false
+  n_seeds: 1
+  vmap_across_seeds: true
+  validation:
+    active: true
+    num_steps: 100
+    num_envs: 100
+    num: 10
+    quantities:
+    - JointPosition
+    - JointVelocity
+    - RelSitePosition
+    - RelSiteVelocity
+    - RelSiteOrientation
+    measures:
+    - EuclideanDistance
+    - DynamicTimeWarping
+    - DiscreteFrechetDistance
+    rel_site_names:
+    - upper_body_mimic
+    - left_hand_mimic
+    - left_foot_mimic
+    - right_hand_mimic
+    - right_foot_mimic
+control_config:
+  torque_control:
+    control_type: SkeletonMuscleControl
+    control_params: null
+randomization_config:
+  randomization_type: ProsthesisRandomizer
+  randomization_params:
+    randomize_prosthesis_dof_damping: false
+    prosthesis_dof_damping_range: {}
+#       ankle_angle:
+#       - 800
+#       - 1000
+    randomize_prosthesis_joint_stiffness: false
+    prosthesis_joint_stiffness_range: {}
+#       ankle_angle:
+#       - 1
+#       - 3
+    randomize_prosthesis_body_position: true
+    prosthesis_body_position_range:
+      pylon_socket:
+        x:
+        - -0.02
+        - 0.02
+        z:
+        - -0.02
+        - 0.02
+      talus:
+        x:
+        - -0.01
+        - 0.01
+        z:
+        - -0.01
+        - 0.01
+    randomize_prosthesis_body_orientation: true
+    prosthesis_body_orientation_range:
+      pylon_socket:
+        x:
+        - -0.2
+        - 0.2
+        y:
+        - -0.3
+        - 0.3
+        z:
+        - -0.2
+        - 0.2
+      talus:
+        x:
+        - -0.1
+        - 0.1
+        z:
+        - -0.1
+        - 0.1
+
+checkpoint_path: null

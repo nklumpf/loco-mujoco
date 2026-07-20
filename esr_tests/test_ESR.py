@@ -200,16 +200,49 @@ print(f"\n  Verification:")
 print(f"  Heel world-Z after transform: {heel_check[2]*1000:.1f}mm  (expected: {box_half_height*1000:.1f}mm)")
 print(f"  Toe  world-Z after transform: {toe_check[2]*1000:.1f}mm   (expected: {box_half_height*1000:.1f}mm)")
 
+# ══════════════════════════════════════════════════════════════════════════════
+print("\n" + "=" * 60)
+print("8. HINGE DIRECTION CHECK")
+print("=" * 60)
+
+_m = env._model
+_d = mujoco.MjData(_m)
+mujoco.mj_resetData(_m, _d)
+mujoco.mj_forward(_m, _d)
+
+hinge_qpos_adr = env._model.jnt_qposadr[hinge_id]
+
+# Forefoot GEOM-Mittelpunkt prüfen, nicht Body-Ursprung!
+z_neutral_geom = _d.geom_xpos[forefoot_geom_id][2]
+z_neutral_body = _d.xpos[forefoot_id][2]
+print(f"  Neutral: forefoot geom z={z_neutral_geom*1000:.1f}mm  body z={z_neutral_body*1000:.1f}mm")
+
+_d.qpos[hinge_qpos_adr] = +0.3
+mujoco.mj_forward(_m, _d)
+z_pos_geom = _d.geom_xpos[forefoot_geom_id][2]
+print(f"  theta=+0.3: geom Δz={(z_pos_geom-z_neutral_geom)*1000:+.1f}mm")
+
+_d.qpos[hinge_qpos_adr] = -0.3
+mujoco.mj_forward(_m, _d)
+z_neg_geom = _d.geom_xpos[forefoot_geom_id][2]
+print(f"  theta=-0.3: geom Δz={(z_neg_geom-z_neutral_geom)*1000:+.1f}mm")
+
+if z_pos_geom > z_neutral_geom:
+    print(f"  → theta > 0 = forefoot geom UP   = KEEL loading ✓")
+    print(f"  → theta < 0 = forefoot geom DOWN = HEEL loading ✓")
+else:
+    print(f"  → theta > 0 = forefoot geom DOWN = HEEL loading ⚠")
+    print(f"  → theta < 0 = forefoot geom UP   = KEEL loading ⚠")
 
 # ══════════════════════════════════════════════════════════════════════════════
 print("\n" + "=" * 60)
-print("8. VIEWER")
+print("9. VIEWER")
 print("=" * 60)
 print("Opening viewer... (close window to exit)")
 with mujoco.viewer.launch_passive(env._model, data) as viewer:
     viewer.cam.lookat[:] = [0.0, -0.085, 0.05]
     viewer.cam.distance  = 1
-    viewer.cam.azimuth   = 90
-    viewer.cam.elevation = 0
+    viewer.cam.azimuth   = 90           # side: 90, below: 90, behind: 0
+    viewer.cam.elevation = 0            # side: 0, below: 90, behind: 0
     while viewer.is_running():
         viewer.sync()

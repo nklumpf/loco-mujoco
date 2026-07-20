@@ -202,28 +202,56 @@ class ProsthesisRandomizer(DomainRandomizer):
 
 
         # Joint stiffness 
-        if backend == jnp: 
+        # Joint stiffness
+        if backend == jnp:
             joint_names = list(prosthesis_joint_stiffness.keys())
-            joint_values = jnp.array(list(prosthesis_joint_stiffness.values()))
-            joint_indices = jnp.array([self._joint_indices[name] for name in joint_names])
-            joint_stiffness = model.jnt_stiffness.at[joint_indices].set(joint_values)
+            if len(joint_names) > 0:
+                joint_values  = jnp.array(list(prosthesis_joint_stiffness.values()))
+                joint_indices = jnp.array([self._joint_indices[name] for name in joint_names], dtype=jnp.int32)
+                joint_stiffness = model.jnt_stiffness.at[joint_indices].set(joint_values)
+            else:
+                joint_stiffness = model.jnt_stiffness
         else:
             joint_stiffness = self._init_joint_stiffness.copy()
             for joint_name, value in prosthesis_joint_stiffness.items():
                 idx = self._joint_indices[joint_name]
                 joint_stiffness[idx] = value
+        # if backend == jnp: 
+        #     joint_names = list(prosthesis_joint_stiffness.keys())
+        #     joint_values = jnp.array(list(prosthesis_joint_stiffness.values()))
+        #     joint_indices = jnp.array([self._joint_indices[name] for name in joint_names])
+        #     joint_stiffness = model.jnt_stiffness.at[joint_indices].set(joint_values)
+        # else:
+        #     joint_stiffness = self._init_joint_stiffness.copy()
+        #     for joint_name, value in prosthesis_joint_stiffness.items():
+        #         idx = self._joint_indices[joint_name]
+        #         joint_stiffness[idx] = value
 
+        # DOF damping
         # DOF damping
         if backend == jnp:
             dof_names = list(prosthesis_dof_damping.keys())
-            dof_values = jnp.array(list(prosthesis_dof_damping.values()))
-            dof_indices = jnp.array([self._dof_indices[name] for name in dof_names])
-            dof_damping = model.dof_damping.at[dof_indices].set(dof_values)
+            if len(dof_names) > 0:
+                dof_values  = jnp.array(list(prosthesis_dof_damping.values()))
+                dof_indices = jnp.array([self._dof_indices[name] for name in dof_names], dtype=jnp.int32)
+                dof_damping = model.dof_damping.at[dof_indices].set(dof_values)
+            else:
+                dof_damping = model.dof_damping
         else:
             dof_damping = self._init_dof_damping.copy()
             for dof_name, value in prosthesis_dof_damping.items():
                 idx = self._dof_indices[dof_name]
                 dof_damping[idx] = value
+        # if backend == jnp:
+        #     dof_names = list(prosthesis_dof_damping.keys())
+        #     dof_values = jnp.array(list(prosthesis_dof_damping.values()))
+        #     dof_indices = jnp.array([self._dof_indices[name] for name in dof_names])
+        #     dof_damping = model.dof_damping.at[dof_indices].set(dof_values)
+        # else:
+        #     dof_damping = self._init_dof_damping.copy()
+        #     for dof_name, value in prosthesis_dof_damping.items():
+        #         idx = self._dof_indices[dof_name]
+        #         dof_damping[idx] = value
 
         
         # Body position
