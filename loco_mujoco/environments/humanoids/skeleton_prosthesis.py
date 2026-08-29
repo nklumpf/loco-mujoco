@@ -1173,6 +1173,11 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                     spec.add_pair(geomname1="floor", geomname2=f"foot_box{side}", solref=self.contact_geom_solref)
                     spec.add_pair(geomname1="floor", geomname2=f"toes_box{side}", solref=self.contact_geom_solref)
 
+                if self.prosthesis_subtype == "SACH":
+                    for side in self.prosthesis_side:
+                        spec.add_pair(geomname1="floor", geomname2=f"foot_box{side}", solref=self.contact_geom_solref)
+                        spec.add_pair(geomname1="floor", geomname2=f"toes_box{side}", solref=self.contact_geom_solref)
+                        
                 # ESR prosthesis sites -- delete biological boxes and add new pairs for ESR contact boxes
                 if self.prosthesis_subtype == "ESR":
                     for side in self.prosthesis_side:
@@ -1216,7 +1221,51 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         model, data, carry = super()._mjx_simulation_pre_step(model, data, carry)
         if self.prosthesis_subtype == "ESR":
             data = self.compute_ESR_hinge_qfrc(data)
+
         return model, data, carry
+
+
+    def _simulation_pre_step(self, model, data, carry):
+        """
+        Overrides parent to inject ESR spring forces in MuJoCo CPU path.
+        Equivalent to _mjx_simulation_pre_step for the CPU evaluation path.
+        """
+        # Call parent first (terrain + domain randomization)
+        print("CPU PRE-STEP CALLED")
+        model, data, carry = super()._simulation_pre_step(model, data, carry)
+
+        # Apply ESR spring forces (same as MJX path)
+        if self.prosthesis_subtype == "ESR":
+            print("ESR FORCE APPLIED")
+            for side in self.prosthesis_side:
+                hinge_dof  = self.esr_hinge_info[side]["hinge_dof"]
+                hinge_qpos = self.esr_hinge_info[side]["hinge_qpos"]
+                theta      = data.qpos[hinge_qpos]
+                L          = self.ESR_lever_arm
+
+                # Clip theta for force calculation
+                theta_f = np.clip(theta,
+                                np.deg2rad(-6.0),
+                                np.deg2rad(14.0))
+
+                z = L * np.sin(theta_f)
+
+                if self.ESR_model_type == "linear":
+                    k   = self.linear_params["k_heel"] if theta_f < 0 else self.linear_params["k_keel"]
+                    F_z = k * z
+                elif self.ESR_model_type == "nonlinear":
+                    if theta_f < 0:
+                        a, b = self.nonlinear_params["heel"]["a"], self.nonlinear_params["heel"]["b"]
+                    else:
+                        a, b = self.nonlinear_params["keel"]["a"], self.nonlinear_params["keel"]["b"]
+                    F_z = (a * np.abs(z) + b) * z
+
+                tau_ESR    = -F_z * L * np.cos(theta_f)
+                tau_mujoco = -self.ESR_hinge_base_stiffness * theta_f
+                tau        = tau_ESR - tau_mujoco
+
+                data.qfrc_applied[hinge_dof] += tau
+        return model, data, carry 
 
 
     def remove_tendons(self, spec, muscle_names):
