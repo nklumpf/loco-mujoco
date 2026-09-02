@@ -124,10 +124,15 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
             
             # lever arm (FJC)
             self.ESR_lever_arm = kwargs.pop("ESR_lever_arm", 0.128)     # m, Lecomte
+            # self.ESR_lever_arm = kwargs.pop("ESR_lever_arm", {"heel" : 0.112, "keel" : 0.102})     # m, Lecomte approximation of lever arm for heel and keel loading (128 mm-16 mm and 230 mm-128 mm)
 
             # Pylon Correction compared to SACH pylon
             self.ESR_pylon_correction = kwargs.pop("ESR_pylon_correction",0.008)
-            self.ESR_visualization_scaling = kwargs.pop("ESR_visualization_scaling", 0.000604)  
+            self.ESR_visualization_scaling = kwargs.pop("ESR_visualization_scaling", 0.000604) 
+
+            self._esr_log_enabled = False
+            self._esr_log_theta = []
+            self._esr_log_tau = [] 
 
         # Socket parameters estimated from models and papers -> similar for both prosthesis types
         self.original_socket_mass = kwargs.pop("socket_mass", 0.3)  # kg
@@ -1034,14 +1039,22 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         for side in self.prosthesis_side:
             hinge_dof = self.esr_hinge_info[side]["hinge_dof"]
             theta     = data.qpos[self.esr_hinge_info[side]["hinge_qpos"]]
-            lever_arm         = self.ESR_lever_arm  # m
             
             # Clip theta for force calculation only (not the actual state)
             # Safety net if MJX joint limits fail
             theta_clipped = jnp.clip(theta,
                           jnp.deg2rad(-6.0),
                           jnp.deg2rad(14.0))
-            
+
+            # TODO: Check ESR_lever_arm
+            lever_arm = self.ESR_lever_arm  # m
+            # Lever arm depending on loading direction (heel vs. keel)
+            # lever_arm = jnp.where(
+            #     theta_clipped < 0,
+            #     self.ESR_lever_arm["heel"],
+            #     self.ESR_lever_arm["keel"]
+            # )
+
             # Vertical compression of the ESR blade (exact, no small angle approx)
             z = lever_arm * jnp.sin(theta_clipped)  # m
 
@@ -1074,10 +1087,18 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
             tau_mujoco  = -self.ESR_hinge_base_stiffness * theta
             tau         = tau_ESR - tau_mujoco
 
-
+            # Logging for Plot
+            if self._esr_log_enabled:
+                jax.debug.callback(
+                    self._log_esr_callback,
+                    theta,
+                    tau_ESR,
+                    ordered=True
+                )
+    
             # Debug Print
-            # jax.debug.print("ESR qfrc called: theta={t:.3f} tau={tau:.2f}",
-            #             t=theta, tau=tau)   
+            jax.debug.print("ESR qfrc called: theta={t:.3f} tau={tau:.2f}",
+                         t=theta, tau=tau)   
             data = data.replace(
                 qfrc_applied=data.qfrc_applied.at[hinge_dof].add(tau)
             )
@@ -1219,53 +1240,89 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
             Tuple[Model, Data, MjxAdditionalCarry]: Updated model, data, and carry.
         """
         model, data, carry = super()._mjx_simulation_pre_step(model, data, carry)
+        # jax.debug.print("MJX PRE-STEP CALLED") 
         if self.prosthesis_subtype == "ESR":
+            # jax.debug.print("ESR FORCE APPLIED")
             data = self.compute_ESR_hinge_qfrc(data)
 
         return model, data, carry
+    
+    def _log_esr_callback(self, theta, tau):
+        """Receive ESR values from JAX and store them in Python lists."""
+        if self._esr_log_enabled:
+            self._esr_log_theta.append(float(theta))
+            self._esr_log_tau.append(float(tau))
 
 
-    def _simulation_pre_step(self, model, data, carry):
-        """
-        Overrides parent to inject ESR spring forces in MuJoCo CPU path.
-        Equivalent to _mjx_simulation_pre_step for the CPU evaluation path.
-        """
-        # Call parent first (terrain + domain randomization)
-        print("CPU PRE-STEP CALLED")
-        model, data, carry = super()._simulation_pre_step(model, data, carry)
+    def _apply_esr_force(self):
+        """Calculates and applies the ESR reaction torque for each substep."""
+        print(
+            "FUNCTION CALLED"
+        )
+        if self.prosthesis_subtype != "ESR":
+            return
 
-        # Apply ESR spring forces (same as MJX path)
-        if self.prosthesis_subtype == "ESR":
-            print("ESR FORCE APPLIED")
-            for side in self.prosthesis_side:
-                hinge_dof  = self.esr_hinge_info[side]["hinge_dof"]
-                hinge_qpos = self.esr_hinge_info[side]["hinge_qpos"]
-                theta      = data.qpos[hinge_qpos]
-                L          = self.ESR_lever_arm
+        for side in self.prosthesis_side:
+            hinge_dof = self.esr_hinge_info[side]["hinge_dof"]
+            hinge_qpos = self.esr_hinge_info[side]["hinge_qpos"]
+            
 
-                # Clip theta for force calculation
-                theta_f = np.clip(theta,
-                                np.deg2rad(-6.0),
-                                np.deg2rad(14.0))
+            theta = self._data.qpos[hinge_qpos]
+            lever_arm = self.ESR_lever_arm
 
-                z = L * np.sin(theta_f)
+            # Clip only for ESR force calculation
+            theta_clipped = np.clip(
+                theta,
+                np.deg2rad(-6.0),
+                np.deg2rad(14.0)
+            )
 
-                if self.ESR_model_type == "linear":
-                    k   = self.linear_params["k_heel"] if theta_f < 0 else self.linear_params["k_keel"]
-                    F_z = k * z
-                elif self.ESR_model_type == "nonlinear":
-                    if theta_f < 0:
-                        a, b = self.nonlinear_params["heel"]["a"], self.nonlinear_params["heel"]["b"]
-                    else:
-                        a, b = self.nonlinear_params["keel"]["a"], self.nonlinear_params["keel"]["b"]
-                    F_z = (a * np.abs(z) + b) * z
+            # Vertical ESR displacement
+            z = lever_arm * np.sin(theta_clipped)
 
-                tau_ESR    = -F_z * L * np.cos(theta_f)
-                tau_mujoco = -self.ESR_hinge_base_stiffness * theta_f
-                tau        = tau_ESR - tau_mujoco
+            # ESR force model
+            if self.ESR_model_type == "linear":
+                k = (
+                    self.linear_params["k_heel"]
+                    if theta_clipped < 0
+                    else self.linear_params["k_keel"]
+                )
+                F_z = k * z
 
-                data.qfrc_applied[hinge_dof] += tau
-        return model, data, carry 
+            elif self.ESR_model_type == "nonlinear":
+                if theta_clipped < 0:
+                    a = self.nonlinear_params["heel"]["a"]
+                    b = self.nonlinear_params["heel"]["b"]
+                else:
+                    a = self.nonlinear_params["keel"]["a"]
+                    b = self.nonlinear_params["keel"]["b"]
+
+                F_z = (a * np.abs(z) + b) * z
+
+            else:
+                raise ValueError(
+                    f"Unknown ESR model type: {self.ESR_model_type}"
+                )
+
+            # ESR torque
+            tau_ESR = -F_z * lever_arm * np.cos(theta_clipped)
+
+            # MuJoCo hinge base stiffness
+            tau_mujoco = -self.ESR_hinge_base_stiffness * theta
+
+            # Additional torque that needs to be applied
+            tau = tau_ESR #- tau_mujoco
+
+            # Apply torque
+            self._data.qfrc_applied[hinge_dof] += tau
+            # In _apply_esr_force, nach dem += tau:
+            print(
+                f"theta={np.rad2deg(theta):.3f}°, "
+                f"tau_ESR={tau_ESR:.4f}, "
+                f"tau_mujoco={tau_mujoco:.4f}, "
+                f"tau_applied={tau:.4f}, "
+                f"qfrc_applied={self._data.qfrc_applied[hinge_dof]:.4f}"
+            )
 
 
     def remove_tendons(self, spec, muscle_names):

@@ -1,5 +1,16 @@
 import os
+
+# Uncomment the following lines to force JAX to use CPU instead of GPU
+# os.environ["CUDA_VISIBLE_DEVICES"] = "" 
+# os.environ["JAX_PLATFORMS"] = "cpu"
+
+import jax
+# Uncomment the following line to force JAX to use CPU instead of GPU
+# jax.config.update('jax_platform_name', 'cpu')
+
 import argparse
+import numpy as np
+import matplotlib.pyplot as plt
 
 from loco_mujoco import TaskFactory
 from loco_mujoco.algorithms import PPOJax
@@ -56,6 +67,10 @@ env = factory.make(**config.experiment.env_params, **config.experiment.task_fact
                    domain_randomization_type=domain_randomization_type,
                     domain_randomization_params=domain_randomization_params)
 
+env._esr_log_enabled = True
+env._esr_log_theta = []
+env._esr_log_tau = []
+
 # Determine which evaluation environment to run
 if args.use_mujoco:
     # run eval mujoco
@@ -65,3 +80,78 @@ else:
     # run eval mjx
     PPOJax.play_policy(env, agent_conf, agent_state, deterministic=False, n_steps=1000, n_envs=1, record=True,
                        train_state_seed=0)
+
+
+theta = np.asarray(env._esr_log_theta)
+tau = np.asarray(env._esr_log_tau)
+
+print("\nESR LOGGING")
+print(f"Number of samples: {len(theta)}")
+print(f"Theta min: {np.rad2deg(theta).min():.3f} deg")
+print(f"Theta max: {np.rad2deg(theta).max():.3f} deg")
+print(f"ROM: {np.rad2deg(theta).max() - np.rad2deg(theta).min():.3f} deg")
+
+print(f"Tau min: {tau.min():.3f} Nm")
+print(f"Tau max: {tau.max():.3f} Nm")
+
+steps = np.arange(len(theta))
+
+fig, axes = plt.subplots(3, 1, figsize=(12, 10))
+
+theta_deg = np.rad2deg(theta)
+
+# ---------------------------------------------------------
+# Theta over time
+# ---------------------------------------------------------
+
+axes[0].plot(steps, theta_deg)
+
+axes[0].axhline(0, linestyle="--", alpha=0.5)
+axes[0].axhline(14, linestyle=":", alpha=0.7)
+axes[0].axhline(-6, linestyle=":", alpha=0.7)
+
+axes[0].set_ylabel(r"$\theta$ [deg]")
+axes[0].set_xlabel("Evaluation step")
+axes[0].set_title(
+    f"ESR Hinge Angle — ROM = "
+    f"{theta_deg.max() - theta_deg.min():.2f}°"
+)
+
+axes[0].grid(True)
+
+
+# ---------------------------------------------------------
+# Torque over time
+# ---------------------------------------------------------
+
+axes[1].plot(steps, tau)
+
+axes[1].axhline(0, linestyle="--", alpha=0.5)
+
+axes[1].set_ylabel(r"$\tau_{\mathrm{ESR}}$ [Nm]")
+axes[1].set_xlabel("Evaluation step")
+axes[1].set_title("ESR Torque")
+
+axes[1].grid(True)
+
+
+# ---------------------------------------------------------
+# Torque-angle curve
+# ---------------------------------------------------------
+
+axes[2].scatter(theta_deg, tau, s=2, alpha=0.5)
+
+axes[2].set_xlabel(r"$\theta$ [deg]")
+axes[2].set_ylabel(r"$\tau_{\mathrm{ESR}}$ [Nm]")
+axes[2].set_title("ESR Torque–Angle Relationship")
+
+axes[2].grid(True)
+
+plt.tight_layout()
+
+plt.savefig(
+    f"esr_analysis_{env.ESR_model_type}.png",
+    dpi=150
+)
+
+plt.show()
