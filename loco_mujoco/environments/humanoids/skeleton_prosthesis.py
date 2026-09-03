@@ -130,9 +130,6 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
             self.ESR_pylon_correction = kwargs.pop("ESR_pylon_correction",0.008)
             self.ESR_visualization_scaling = kwargs.pop("ESR_visualization_scaling", 0.000604) 
 
-            self._esr_log_enabled = False
-            self._esr_log_theta = []
-            self._esr_log_tau = [] 
 
         # Socket parameters estimated from models and papers -> similar for both prosthesis types
         self.original_socket_mass = kwargs.pop("socket_mass", 0.3)  # kg
@@ -293,7 +290,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                     "hinge_qpos": self._model.jnt_qposadr[hinge_id],
                     "hinge_dof":  self._model.jnt_dofadr[hinge_id],
                 }
-                print(f"  Cached esr_hinge{side}: qpos={self._model.jnt_qposadr[hinge_id]}, dof={self._model.jnt_dofadr[hinge_id]}")
+                # print(f"  Cached esr_hinge{side}: qpos={self._model.jnt_qposadr[hinge_id]}, dof={self._model.jnt_dofadr[hinge_id]}")
 
         # Cache hinge sensor IDs for evaluation
         if self.prosthesis_subtype == "ESR" and self.add_sensors:
@@ -1086,19 +1083,10 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
             tau_ESR     = -F_z * lever_arm * jnp.cos(theta_clipped)  # Nm
             tau_mujoco  = -self.ESR_hinge_base_stiffness * theta
             tau         = tau_ESR - tau_mujoco
-
-            # Logging for Plot
-            if self._esr_log_enabled:
-                jax.debug.callback(
-                    self._log_esr_callback,
-                    theta,
-                    tau_ESR,
-                    ordered=True
-                )
     
             # Debug Print
-            jax.debug.print("ESR qfrc called: theta={t:.3f} tau={tau:.2f}",
-                         t=theta, tau=tau)   
+            # jax.debug.print("ESR qfrc called: theta={t:.3f} tau={tau:.2f}",
+            #              t=theta, tau=tau)   
             data = data.replace(
                 qfrc_applied=data.qfrc_applied.at[hinge_dof].add(tau)
             )
@@ -1249,10 +1237,6 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
     
     def _log_esr_callback(self, theta, tau):
         """Receive ESR values from JAX and store them in Python lists."""
-        if self._esr_log_enabled:
-            self._esr_log_theta.append(float(theta))
-            self._esr_log_tau.append(float(tau))
-
 
     def _apply_esr_force(self):
         """Calculates and applies the ESR reaction torque for each substep."""
