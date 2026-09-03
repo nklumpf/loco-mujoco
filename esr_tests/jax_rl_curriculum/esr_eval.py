@@ -66,9 +66,16 @@ domain_randomization_params = {
     "randomize_prosthesis_joint_stiffness": False,
     "prosthesis_joint_stiffness_range": {},
     "randomize_prosthesis_body_position": True,
-    "prosthesis_body_position_range": 
-    {"pylon_socket": {"x": [-0.0, 0.0], "z": [-0.0, 0.0]},
-    "talus": {"x": [-0.0, 0.0], "z": [-0.0, 0.0]}},
+    "prosthesis_body_position_range": {
+        "pylon_socket": {
+            "x": [-0.0, 0.0], 
+            "z": [-0.0, 0.0]
+        },
+            "talus": {
+                "x": [-0.0, 0.0], 
+                "z": [-0.0, 0.0]
+        }
+    },
     "randomize_prosthesis_body_orientation": True,
     "prosthesis_body_orientation_range": {
         "pylon_socket": {
@@ -130,7 +137,7 @@ def find_mujoco_model(obj):
                 if (hasattr(candidate, "jnt_qposadr") and hasattr(candidate, "joint")):
                     return candidate
 
-        # Search through wrappers
+        # Search through environment wrappers.
         for name in ["env", "_env", "wrapped_env"]:
             if hasattr(x, name):
                 child = getattr(x, name)
@@ -146,8 +153,7 @@ if mj_model is None:
 print("\nMuJoCo model found.")
 
 # Find ESR hinge joint
-# Name of the ESR hinge joint in the MuJoCo model
-HINGE_NAME = "esr_hinge_r"  
+HINGE_NAME = "esr_hinge_r"  # Name of the ESR hinge joint in the MuJoCo model 
 # Obtain the numerical MuJoCo joint ID from its name.
 hinge_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_JOINT, HINGE_NAME)
 if hinge_id < 0:
@@ -220,6 +226,7 @@ for i in range(args.n_steps):
     theta = env_state.data.qpos[0, hinge_qpos_adr]
     theta = float(theta)
 
+    # Store data
     theta_log.append(theta)
     steps.append(i)
 
@@ -227,7 +234,7 @@ for i in range(args.n_steps):
     if args.record:
         env.mjx_render(env_state, record=True)
 
-    # Progress prints
+    # Progress output
     if i % 100 == 0:
         print(f"Step {i:5d}: "
               f"theta = "
@@ -235,7 +242,7 @@ for i in range(args.n_steps):
 
 env.stop()
 
-# Convert to numpy
+# Convert recorded data to NumPy arrays
 theta = np.asarray(theta_log)
 steps = np.asarray(steps)
 theta_deg = np.rad2deg(theta)
