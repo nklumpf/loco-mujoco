@@ -12,6 +12,7 @@ loco_mujoco/datasets/
 mushroom_rl_recordings/
 LocoMuJoCo_recordings/
 outputs/
+outputs_SACH/
 record_all/
 _build/
 loco_mujoco/models/myo_model/
@@ -28,6 +29,7 @@ loco_mujoco/LOCOMUJOCO_VARIABLES.yaml
 **/expert_traj.npz
 *.png
 *.csv
+esr_tests/jax_rl_curriculum/conf_P1_continue.yaml
 
 outputs/
 stiffness-data/
