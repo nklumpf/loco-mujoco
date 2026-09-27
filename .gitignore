@@ -30,6 +30,8 @@ loco_mujoco/LOCOMUJOCO_VARIABLES.yaml
 *.png
 *.csv
 esr_tests/jax_rl_curriculum/conf_P1_continue.yaml
+esr_tests/jax_rl_curriculum/evalution/plots/
+esr_tests/jax_rl_curriculum/evaluation/LocoMuJoCo_recordings/
 
 outputs/
 stiffness-data/
