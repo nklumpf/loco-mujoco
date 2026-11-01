@@ -351,7 +351,7 @@ def run_sign_shift_diagnostics(df, cycle_left, cycle_right, x_norm, literature_c
     signal_specs = [
         ("Ankle angle", "ankle_left_angle_deg", "ankle_right_angle_deg", "ankle_angle",  False),
         ("Ankle moment","ankle_left_moment",    "ankle_right_moment",    "ankle_moment", True),
-        ("Ankle power", "ankle_left_power",     "ankle_right_power",     "ankle_power",  False),
+        ("Ankle power", "ankle_left_power",     "ankle_right_power",     "ankle_power",  True),
         ("Knee angle",  "knee_left_angle_deg",  "knee_right_angle_deg",  "knee_angle",   False),
         ("Knee moment", "knee_left_moment",     "knee_right_moment",     "knee_moment",  True),
         ("Knee power",  "knee_left_power",      "knee_right_power",      "knee_power",   True),

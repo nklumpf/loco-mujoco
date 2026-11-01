@@ -25,3 +25,5 @@ rm "$OUTPUT_FILE"
 
 
 python experiment.py --config-name conf_P2 checkpoint_path="$SAVE_PATH"
+
+# python experiment.py --config-name conf_P2 checkpoint_path="/home/naomiklumpf/loco-mujoco/esr_tests/jax_rl_curriculum/outputs/2026-10-10/20-42-58/PPOJax_saved.pkl"

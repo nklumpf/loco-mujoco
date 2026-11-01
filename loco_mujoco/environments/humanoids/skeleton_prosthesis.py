@@ -96,7 +96,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         if hasattr(self, "prosthesis_subtype") and self.prosthesis_subtype == "ESR":
             # Define base stiffness and damping in esr_hinge_joint
             self.ESR_hinge_base_stiffness = kwargs.pop("ESR_hinge_base_stiffness", 100.0) 
-            self.ESR_hinge_base_damping   = kwargs.pop("ESR_hinge_base_damping", 7.0) 
+            self.ESR_hinge_base_damping   = kwargs.pop("ESR_hinge_base_damping", 7.0) # 7.0
 
             # Define default ESR-model type as linear
             self.ESR_model_type = kwargs.pop("ESR_model_type", "linear")
@@ -107,8 +107,8 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
             # Load ESR Parameter
             if self.ESR_model_type == "linear":
                 self.linear_params = kwargs.pop("linear_params", {
-                    "k_heel": 57507.3,  # N/m (from Lecomte curve fit, Variflex XC heel loading)
-                    "k_keel": 24103.6   # N/m (from Lecomte curve fit, Variflex XC keel loading)
+                    "k_heel": 57507.3, # 57505.3, #  # N/m (from Lecomte curve fit, Variflex XC heel loading)
+                    "k_keel": 24103.6 # 24103.6 #   # N/m (from Lecomte curve fit, Variflex XC keel loading)
                 })  
             else:
                 self.nonlinear_params = kwargs.pop("nonlinear_params", {
@@ -192,7 +192,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         # socket joint ranges
         self.default_socket_joint_ranges = {
             "socket_tx": [-0.01, 0.01],
-            "socket_ty": [-0.02, 0.02],
+            "socket_ty": [-0.003, 0.003], #Klute et al. (2011)[-0.02, 0.02],
             "socket_tz": [-0.01, 0.01],
             "socket_flexion": [-0.174, 0.087],
             "socket_adduction": [-0.1, 0.1],
@@ -200,14 +200,6 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         }
         user_ranges = kwargs.pop("socket_joint_ranges", {}) # If provided should be dict like defult_socket_joint_ranges
         self.socket_joint_ranges = {**self.default_socket_joint_ranges, **user_ranges}
-
-        # For ESR: disable native MuJoCo spring in tx/ty, ESR force law takes over via qfrc_applied
-        if self.prosthesis_subtype == "ESR":
-            self.socket_joint_stiffnesses["socket_ty"] = 0.0
-            self.socket_joint_stiffnesses["socket_tx"] = 0.0
-            # Larger range to allow blade deflection
-            self.socket_joint_ranges["socket_ty"] = [-0.05, 0.05]
-            self.socket_joint_ranges["socket_tx"] = [-0.03, 0.03]
 
         # NOTE: think about it, whether changed or not -> in reality slackness exists
         # Slackness of the socket joint
@@ -221,7 +213,8 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         if "multi_contact_geom_type" in kwargs:
             self.multi_contact_geom_type = kwargs.pop("multi_contact_geom_type") # Only 2boxes implemented for now
             kwargs["keep_feet_joints"] = True
-        self.contact_geom_solref = kwargs.pop("contact_geom_solref", [0.02, 1.0])
+        self.contact_geom_solref = kwargs.pop("contact_geom_solref", [-900, -300]) #[0.02, 1.0])
+        self.contact_geom_solref_prosthesis = kwargs.pop("contact_geom_solref_prosthesis", [-4000, -400])#[0.02, 1.0])
 
         self.actuators_removed = []
         self.amputated_body_names = []
@@ -252,24 +245,35 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
             # ESR: add hinge joint position and velocity sensors
             if self.prosthesis_subtype == "ESR":
                 for side in self.prosthesis_side:
-                    spec.add_sensor(
-                        name=f"esr_hinge_pos{side}",
-                        type=mujoco.mjtSensor.mjSENS_JOINTPOS,
-                        objtype=mujoco.mjtObj.mjOBJ_JOINT,
-                        objname=f"ankle_angle{side}"
-                    )
-                    spec.add_sensor(
-                        name=f"esr_hinge_vel{side}",
-                        type=mujoco.mjtSensor.mjSENS_JOINTVEL,
-                        objtype=mujoco.mjtObj.mjOBJ_JOINT,
-                        objname=f"ankle_angle{side}"
-                    )
-                    spec.add_sensor(
-                        name=f"esr_hinge_torque{side}",
-                        type=mujoco.mjtSensor.mjSENS_JOINTACTFRC,  # actual joint force/torque
-                        objtype=mujoco.mjtObj.mjOBJ_JOINT,
-                        objname=f"ankle_angle{side}"
-                    )
+                    forefoot = spec.find_body(f"esr_forefoot{side}")
+                    if forefoot is None:
+                        raise ValueError(f"esr_forefoot{side} not in spec yet")
+                    forefoot.add_site(name=f"esr_hinge_site{side}", pos=[0, 0, 0], size=[0.005, 0.005, 0.005])
+                    self.add_torque_sensor(spec, f"esr_hinge_site{side}")
+
+                    spec.add_sensor(name=f"esr_hinge_pos{side}", type=mujoco.mjtSensor.mjSENS_JOINTPOS,
+                                    objtype=mujoco.mjtObj.mjOBJ_JOINT, objname=f"ankle_angle{side}")
+                    spec.add_sensor(name=f"esr_hinge_vel{side}", type=mujoco.mjtSensor.mjSENS_JOINTVEL,
+                                    objtype=mujoco.mjtObj.mjOBJ_JOINT, objname=f"ankle_angle{side}")
+                # for side in self.prosthesis_side:
+                #     spec.add_sensor(
+                #         name=f"esr_hinge_pos{side}",
+                #         type=mujoco.mjtSensor.mjSENS_JOINTPOS,
+                #         objtype=mujoco.mjtObj.mjOBJ_JOINT,
+                #         objname=f"ankle_angle{side}"
+                #     )
+                #     spec.add_sensor(
+                #         name=f"esr_hinge_vel{side}",
+                #         type=mujoco.mjtSensor.mjSENS_JOINTVEL,
+                #         objtype=mujoco.mjtObj.mjOBJ_JOINT,
+                #         objname=f"ankle_angle{side}"
+                #     )
+                #     spec.add_sensor(
+                #         name=f"esr_hinge_torque{side}",
+                #         type=mujoco.mjtSensor.mjSENS_JOINTACTFRC,  # actual joint force/torque
+                #         objtype=mujoco.mjtObj.mjOBJ_JOINT,
+                #         objname=f"ankle_angle{side}"
+                #     )
         
         super().__init__(timestep=timestep, n_substeps=n_substeps,
                          spec=spec,
@@ -296,20 +300,29 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
         if self.prosthesis_subtype == "ESR" and self.add_sensors:
             self.esr_hinge_sensor_ids = {}
             for side in self.prosthesis_side:
-                pos_id = mujoco.mj_name2id(
-                    self._model, mujoco.mjtObj.mjOBJ_SENSOR, f"esr_hinge_pos{side}"
-                )
-                vel_id = mujoco.mj_name2id(
-                    self._model, mujoco.mjtObj.mjOBJ_SENSOR, f"esr_hinge_vel{side}"
-                )
-                torque_id = mujoco.mj_name2id(
-                    self._model, mujoco.mjtObj.mjOBJ_SENSOR, f"esr_hinge_torque{side}"
-                )
-                self.esr_hinge_sensor_ids[side] = {
-                    "pos":    self._model.sensor_adr[pos_id],
-                    "vel":    self._model.sensor_adr[vel_id],
-                    "torque": self._model.sensor_adr[torque_id]
-                }  
+                ids = {}
+                for key, name in [("pos", f"esr_hinge_pos{side}"),
+                                ("vel", f"esr_hinge_vel{side}"),
+                                ("torque", f"esr_hinge_site{side}_torque_sensor")]:
+                    sid = mujoco.mj_name2id(self._model, mujoco.mjtObj.mjOBJ_SENSOR, name)
+                    if sid == -1:
+                        raise RuntimeError(f"Sensor '{name}' not found in compiled model.")
+                    ids[key] = self._model.sensor_adr[sid]
+                self.esr_hinge_sensor_ids[side] = ids
+                # pos_id = mujoco.mj_name2id(
+                #     self._model, mujoco.mjtObj.mjOBJ_SENSOR, f"esr_hinge_pos{side}"
+                # )
+                # vel_id = mujoco.mj_name2id(
+                #     self._model, mujoco.mjtObj.mjOBJ_SENSOR, f"esr_hinge_vel{side}"
+                # )
+                # torque_id = mujoco.mj_name2id(
+                #     self._model, mujoco.mjtObj.mjOBJ_SENSOR, f"esr_hinge_torque{side}"
+                # )
+                # self.esr_hinge_sensor_ids[side] = {
+                #     "pos":    self._model.sensor_adr[pos_id],
+                #     "vel":    self._model.sensor_adr[vel_id],
+                #     "torque": self._model.sensor_adr[torque_id]
+                # }  
 
     def add_force_sensor(self, spec, site_name):
         """
@@ -691,7 +704,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                         axis=[1,0,0],            
                         stiffness=self.ESR_hinge_base_stiffness,           
                         damping=self.ESR_hinge_base_damping,
-                        range=[-0.105,0.244] # -6° and 14° in rad (Lecomte)
+                        range=[-0.105,0.349] # -6 and 20° #[-0.105,0.244] # -6° and 14° in rad (Lecomte)
                     )
 
                     # Forefoot visualization box
@@ -721,16 +734,16 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                     )
 
                     # Delete old Mimic-Site on calcn_r (kinematic invariant to ESR-Hinge) and create new on esr_forefoot_r to make hinge-movement is actually visible in the "Reward/Observation" section
-                    old_mimic_site = spec.find_site(f"right_foot_mimic")
-                    if old_mimic_site is not None:
-                        old_mimic_site.delete()
+                    # old_mimic_site = spec.find_site(f"right_foot_mimic")
+                    # if old_mimic_site is not None:
+                    #     old_mimic_site.delete()
 
-                    forefoot_body.add_site(
-                        name=f"right_foot_mimic",
-                        pos=[-0.1083, -0.0013, 0.0069],
-                        size=[0.005, 0.005, 0.005],
-                        rgba=[1, 0, 1, 1]
-                    )
+                    # forefoot_body.add_site(
+                    #     name=f"right_foot_mimic",
+                    #     pos=[0.01, 0.0175, 0.0058],
+                    #     size=[0.005, 0.005, 0.005],
+                    #     rgba=[1, 0, 1, 1]
+                    # )
 
 
         socket_joint_offset = (1 / 3) * amputated_tibia_length
@@ -877,12 +890,12 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                 target_quat=talus_body.quat,
             )
 
-            # NEW: sensor site for the corrected ankle moment, added on the
+            # sensor site for the corrected ankle moment, added on the
             # freshly-copied body BEFORE detaching the original talus_body
             if self.prosthesis_subtype == "ESR":
                 new_rearfoot_body.add_site(
                     name=f"prosthetic_ankle{side}",
-                    pos=[0, 0, 0],   # exakt am Pylon-Rearfoot-Attachment-Punkt
+                    pos=[0, 0, 0],   # exact on Pylon-Rearfoot-Attachment-Punkt
                     size=[0.005, 0.005, 0.005],
                     rgba=[1, 0, 1, 1]
                 )
@@ -1082,22 +1095,16 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
             hinge_dof = self.esr_hinge_info[side]["hinge_dof"]
             theta     = data.qpos[self.esr_hinge_info[side]["hinge_qpos"]]
             
-            # Clip theta for force calculation only (not the actual state)
-            # Safety net if MJX joint limits fail
-            theta_clipped = jnp.clip(theta,
-                          jnp.deg2rad(-6.0),
-                          jnp.deg2rad(14.0))
-            
             lever_arm = self.ESR_lever_arm  # m
 
             # Vertical compression of the ESR blade (exact, no small angle approx)
-            z = lever_arm * jnp.sin(theta_clipped)  # m
+            z = lever_arm * jnp.sin(theta)  # m
 
             if self.ESR_model_type == "linear":
                 # Select stiffness based on loading direction
                 # theta < 0: heel strike (dorsiflexion), theta >= 0: keel/push-off (plantarflexion)
                 k = jnp.where(
-                    theta_clipped < 0,
+                    theta < 0,
                     self.linear_params["k_heel"],   # N/m
                     self.linear_params["k_keel"])    # N/m
                 F_z = k * z  # N
@@ -1105,27 +1112,27 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
             elif self.ESR_model_type == "nonlinear":
                 # Select nonlinear coefficients based on loading direction
                 a = jnp.where(
-                    theta_clipped < 0,
+                    theta < 0,
                     self.nonlinear_params["heel"]["a"],  # N/m²
                     self.nonlinear_params["keel"]["a"])   # N/m²
                 b = jnp.where(
-                    theta_clipped < 0,
+                    theta < 0,
                     self.nonlinear_params["heel"]["b"],  # N/m
                     self.nonlinear_params["keel"]["b"])   # N/m
                 F_z = (a * jnp.abs(z) + b) * z  # N
 
             # Joint torque (exact, no small angle approximation)
-            tau_ESR     = -F_z * lever_arm * jnp.cos(theta_clipped)  # Nm
+            tau_ESR     = -F_z * lever_arm * jnp.cos(theta)  # Nm
             tau_mujoco  = -self.ESR_hinge_base_stiffness * theta
             tau         = tau_ESR - tau_mujoco
     
             # Debug Print
             # jax.debug.print("ESR qfrc called: theta={t:.3f} tau={tau:.2f}",
             #              t=theta, tau=tau)   
-            data = data.replace(qfrc_applied=data.qfrc_applied.at[hinge_dof].add(tau))
+            data = data.replace(qfrc_applied=data.qfrc_applied.at[hinge_dof].set(tau))
         return data
     
-
+    # TODO: CHECK GRF- CONTACT BOX
     def _add_box_feet_to_spec(self, spec, alpha_box_feet):
         """
         Adds box feet to Mujoco spec and makes old feet non-collidable.
@@ -1165,7 +1172,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                     rearfoot_body.add_geom(
                         name=f"esr_heel_contact{side}",
                         type=mujoco.mjtGeom.mjGEOM_BOX,
-                        size=[0.04, 0.008, 0.02],  # x: left/right, y: up/down, z: front/back
+                        size=[0.04, 0.008, 0.025],  # x: left/right, y: up/down, z: front/back
                         pos=[-0.051, -0.0538, -0.011],  # x: front/back, - back; y: up/down; # z: left/right
                         rgba=[0.2, 0.8, 0.2, 0.5],
                         quat=[0.643,0,-0.766,0],        # Rotation same as talus in visualization
@@ -1183,7 +1190,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                     forefoot_body.add_geom(
                         name=f"esr_toe_contact{side}",
                         type=mujoco.mjtGeom.mjGEOM_BOX,
-                        size=[0.04, 0.008, 0.02],
+                        size=[0.04, 0.008, 0.04],
                         pos=[0.005, -0.0195, -0.102], 
                         rgba=[0.2, 0.8, 0.2, 0.5],
                         group=0
@@ -1238,7 +1245,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                             spec.add_pair(
                                 geomname1="floor",
                                 geomname2=geom_name,
-                                solref=self.contact_geom_solref
+                                solref=self.contact_geom_solref_prosthesis
                             )
         else:
             spec.add_pair(geomname1="floor", geomname2="foot_box_r", solref=self.contact_geom_solref)
@@ -1285,22 +1292,20 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
             theta = self._data.qpos[hinge_qpos]
             lever_arm = self.ESR_lever_arm
 
-            # Clip only for ESR force calculation
-            theta_clipped = np.clip(theta, np.deg2rad(-6.0), np.deg2rad(14.0))
 
             # Vertical ESR displacement
-            z = lever_arm * np.sin(theta_clipped)
+            z = lever_arm * np.sin(theta)
 
             # ESR force model
             if self.ESR_model_type == "linear":
                 k = (
                     self.linear_params["k_heel"]
-                    if theta_clipped < 0
+                    if theta < 0
                     else self.linear_params["k_keel"])
                 F_z = k * z
 
             elif self.ESR_model_type == "nonlinear":
-                if theta_clipped < 0:
+                if theta < 0:
                     a = self.nonlinear_params["heel"]["a"]
                     b = self.nonlinear_params["heel"]["b"]
                 else:
@@ -1310,12 +1315,10 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
                 F_z = (a * np.abs(z) + b) * z
 
             else:
-                raise ValueError(
-                    f"Unknown ESR model type: {self.ESR_model_type}"
-                )
+                raise ValueError(f"Unknown ESR model type: {self.ESR_model_type}")
 
             # ESR torque
-            tau_ESR = -F_z * lever_arm * np.cos(theta_clipped)
+            tau_ESR = -F_z * lever_arm *theta * np.cos(theta)
 
             # MuJoCo hinge base stiffness
             tau_mujoco = -self.ESR_hinge_base_stiffness * theta
@@ -1324,7 +1327,7 @@ class MjxSkeletonMuscleProsthesis(MjxSkeletonMuscle):
             tau = tau_ESR - tau_mujoco
 
             # Apply torque
-            self._data.qfrc_applied[hinge_dof] += tau
+            self._data.qfrc_applied[hinge_dof] = tau
             # In _apply_esr_force, nach dem += tau:
             print(
                 f"theta={np.rad2deg(theta):.3f}°, "

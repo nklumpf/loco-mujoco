@@ -234,15 +234,138 @@ else:
     print(f"  → theta > 0 = forefoot geom DOWN = HEEL loading ⚠")
     print(f"  → theta < 0 = forefoot geom UP   = KEEL loading ⚠")
 
-# ══════════════════════════════════════════════════════════════════════════════
+
+
+# =============================================================================
+# 9. RENDER FULL SKELETON AND ESR PROSTHESIS VIEWS
+# =============================================================================
+
+import mujoco
+import numpy as np
+from PIL import Image
+
 print("\n" + "=" * 60)
-print("9. VIEWER")
+print("9. RENDER ESR VISUALIZATION")
 print("=" * 60)
-print("Opening viewer... (close window to exit)")
-with mujoco.viewer.launch_passive(env._model, data) as viewer:
-    viewer.cam.lookat[:] = [0.0, -0.085, 0.05]
-    viewer.cam.distance  = 1
-    viewer.cam.azimuth   = 90           # side: 90, below: 90, behind: 0
-    viewer.cam.elevation = 0            # side: 0, below: 90, behind: 0
-    while viewer.is_running():
-        viewer.sync()
+
+IMAGE_WIDTH = 640
+IMAGE_HEIGHT = 480
+
+renderer = mujoco.Renderer(
+    env._model,
+    width=IMAGE_WIDTH,
+    height=IMAGE_HEIGHT
+)
+
+# ---------------------------------------------------------------------------
+# Visualization options
+# ---------------------------------------------------------------------------
+opt_full = mujoco.MjvOption()
+opt_detail = mujoco.MjvOption()
+
+# Keep the full skeleton uncluttered.
+opt_full.flags[mujoco.mjtVisFlag.mjVIS_JOINT] = False
+opt_full.flags[mujoco.mjtVisFlag.mjVIS_COM] = False
+
+# Show joint axes in the detail views to help identify the hinge.
+opt_detail.flags[mujoco.mjtVisFlag.mjVIS_JOINT] = True
+opt_detail.flags[mujoco.mjtVisFlag.mjVIS_COM] = False
+
+# ---------------------------------------------------------------------------
+# Camera helper
+# ---------------------------------------------------------------------------
+def make_camera(lookat, distance, azimuth, elevation):
+    cam = mujoco.MjvCamera()
+    cam.type = mujoco.mjtCamera.mjCAMERA_FREE
+    cam.lookat[:] = lookat
+    cam.distance = distance
+    cam.azimuth = azimuth
+    cam.elevation = elevation
+    return cam
+
+
+def render_view(filename, camera, options):
+    renderer.update_scene(
+        data,
+        camera=camera,
+        scene_option=options
+    )
+    image = renderer.render().copy()
+    Image.fromarray(image).save(filename)
+    print(f"Saved: {filename}")
+
+
+# ---------------------------------------------------------------------------
+# View A: Full musculoskeletal skeleton
+# ---------------------------------------------------------------------------
+body_positions = data.xpos[1:]
+z_min = np.min(body_positions[:, 2])
+z_max = np.max(body_positions[:, 2])
+z_center = 0.5 * (z_min + z_max)
+
+cam_full = make_camera(
+    lookat=[0.0, -0.05, z_center],
+    distance=2.8,
+    azimuth=135,
+    elevation=-3
+)
+
+render_view(
+    "full_skeleton.png",
+    cam_full,
+    opt_full
+)
+
+# ---------------------------------------------------------------------------
+# Determine the ESR prosthesis position
+# ---------------------------------------------------------------------------
+rearfoot_id = mujoco.mj_name2id(
+    env._model, mujoco.mjtObj.mjOBJ_BODY, "talus_r"
+)
+forefoot_id = mujoco.mj_name2id(
+    env._model, mujoco.mjtObj.mjOBJ_BODY, "esr_forefoot_r"
+)
+
+rearfoot_pos = data.xpos[rearfoot_id].copy()
+forefoot_pos = data.xpos[forefoot_id].copy()
+
+# Center the view around the foot, slightly above the hinge/foot region.
+zoom_center = 0.5 * (rearfoot_pos + forefoot_pos)
+zoom_center[2] += 0.10
+
+# ---------------------------------------------------------------------------
+# View B: Side view
+# ---------------------------------------------------------------------------
+# Increase distance if the pylon or foot is still cropped.
+cam_side = make_camera(
+    lookat=zoom_center,
+    distance=1.1,
+    azimuth=90,
+    elevation=-3
+)
+
+render_view(
+    "prosthesis_side.png",
+    cam_side,
+    opt_detail
+)
+
+# ---------------------------------------------------------------------------
+# View C: Oblique view
+# ---------------------------------------------------------------------------
+cam_oblique = make_camera(
+    lookat=zoom_center,
+    distance=1.1,
+    azimuth=135,
+    elevation=-5
+)
+
+render_view(
+    "prosthesis_oblique.png",
+    cam_oblique,
+    opt_detail
+)
+
+renderer.close()
+
+print("Rendering completed.")

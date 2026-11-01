@@ -20,9 +20,10 @@ from analysis_core import (
     apply_phase_shift,
     per_kg,
     PHASE_SHIFT,
-    PHASE_SHIFT_PERCENT)
+    PHASE_SHIFT_PERCENT,
+    BODY_MASS_KG)
 
-GRF_THRESHOLD = 150
+GRF_THRESHOLD = 150 # individual adjustments necessary
 
 
 def compute_grf_threshold(body_mass_kg, bw_fraction=0.05):

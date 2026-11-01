@@ -109,8 +109,24 @@ class ProsthesisReward(MimicReward):
                     quat_in_qpos.append(qposid[3:])
         self._qpos_ind = np.concatenate(qpos_ind)
         self._qvel_ind = np.concatenate(qvel_ind)
+
+        # Optional joint-specific qpos weights
+        self._joint_qpos_weights_cfg = kwargs.get("joint_qpos_weights", {})
+        self._joint_qpos_weights = np.ones(len(self._qpos_ind))
+
         quat_in_qpos = np.concatenate(quat_in_qpos)
         self._quat_in_qpos = np.array([True if q in quat_in_qpos else False for q in self._qpos_ind])
+
+        # map joint names to qpos indices
+        for joint_name, weight in self._joint_qpos_weights_cfg.items():
+            qpos_ids = mj_jntname2qposid(joint_name, model)
+            for qid in np.atleast_1d(qpos_ids):
+                matches = np.where(self._qpos_ind == qid)[0]
+                if len(matches) > 0:
+                    self._joint_qpos_weights[matches] = float(weight)
+        # print("Joint qpos weights:")
+        # for idx, qid in enumerate(self._qpos_ind):
+        #     print(qid, self._joint_qpos_weights[idx])
 
         # calc mask for the root free joint velocities
         self._free_joint_qvel_ind = np.array(mj_jntname2qvelid(self._info_props["root_free_joint_xml_name"], model))
@@ -223,8 +239,14 @@ class ProsthesisReward(MimicReward):
                                                 model.body_rootid, backend))
 
         # calculate distances
-        qpos_dist = backend.mean(backend.square(qpos[~self._quat_in_qpos] - qpos_traj[~self._quat_in_qpos]))
-        qpos_dist += backend.mean(quaternion_angular_distance(qpos_quat, qpos_quat_traj, backend))
+        # qpos_dist = backend.mean(backend.square(qpos[~self._quat_in_qpos] - qpos_traj[~self._quat_in_qpos]))
+        # qpos_dist += backend.mean(quaternion_angular_distance(qpos_quat, qpos_quat_traj, backend))
+
+        qpos_error = backend.square(qpos[~self._quat_in_qpos] - qpos_traj[~self._quat_in_qpos])
+        qpos_weights = backend.asarray(self._joint_qpos_weights[~self._quat_in_qpos])
+        qpos_dist = (backend.sum(qpos_error * qpos_weights) / backend.sum(qpos_weights))
+        qpos_dist += backend.mean(quaternion_angular_distance(qpos_quat,qpos_quat_traj, backend))
+
         qvel_dist = backend.mean(backend.square(qvel - qvel_traj))
         if len(self._rel_site_ids) > 1:
             rpos_dist = backend.mean(backend.square(site_rpos - site_rpos_traj))

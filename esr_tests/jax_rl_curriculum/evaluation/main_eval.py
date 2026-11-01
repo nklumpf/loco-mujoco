@@ -39,6 +39,7 @@ from analysis_core import (
     RUN_DIAGNOSTICS,
     run_sign_shift_diagnostics,
     PHASE_SHIFT,
+    BODY_MASS_KG,
     )
 
 from symmetry import (
@@ -116,6 +117,24 @@ def signal_unit(label):
         return "grf"
     return "other"
 
+def save_curve_csv(plot_dir, name, x, sim_mean, sim_std=None, lit=None, extra=None, xname="gait_cycle"):
+    """
+    Speichert eine Vergleichskurve als CSV fuer pgfplots. Die Literaturkurve wird aufs
+    Simulationsraster interpoliert; ausserhalb ihres Definitionsbereichs steht 'nan'.
+    """
+    out_dir = os.path.join(plot_dir, "plot_data")
+    os.makedirs(out_dir, exist_ok=True)
+    x = np.asarray(x, dtype=float)
+    data = {xname: x, "sim_mean": np.asarray(sim_mean, dtype=float)}
+    if sim_std is not None:
+        data["sim_lower"] = data["sim_mean"] - np.asarray(sim_std, dtype=float)
+        data["sim_upper"] = data["sim_mean"] + np.asarray(sim_std, dtype=float)
+    if lit is not None:
+        data["literature"] = np.interp(x, lit[0], lit[1], left=np.nan, right=np.nan)
+    for key, values in (extra or {}).items():
+        data[key] = np.asarray(values, dtype=float)
+    pd.DataFrame(data).to_csv(os.path.join(out_dir, f"{name}.csv"),
+                              index=False, float_format="%.5g", na_rep="nan")
 
 def extract_stance_normalized_cycles(grf_raw, n_points=101):
     """
@@ -181,6 +200,7 @@ def main():
     # hinge has no DOF in the reference trajectory -- ref_ankle_right_angle_deg
     # is NaN in that case).
     is_esr = (args.subtype == "ESR")
+    print(is_esr)
 
     if args.path is not None:
         raw_data_path = args.path
@@ -193,6 +213,9 @@ def main():
             args.model_type if args.subtype == "ESR" else None,
             timestamp)
         raw_data_path = os.path.join(plot_dir, "raw_joint_data.csv")
+        # Modelltyp aus dem Pfad lesen (plots/ESR/<model_type>/<datum>/<zeit>), nicht aus dem CLI-Default
+    path_model_type = os.path.basename(os.path.dirname(os.path.dirname(plot_dir)))
+    model_type = path_model_type if path_model_type in ("linear", "nonlinear") else args.model_type
 
     # Load raw_data path
     print(f"Loading: {raw_data_path}")
@@ -207,8 +230,9 @@ def main():
     if is_esr:
         df["ankle_right_angle_deg_raw"] = df["ankle_right_angle_deg"].copy()
         df["ankle_right_angle_deg"] = df["ankle_right_angle_deg_lit_convention"]
-        df["ankle_right_moment"] = df["ankle_right_moment_corrected"]
-        df["ankle_right_power"]  = df["ankle_right_power_corrected"]
+        df["ankle_right_moment"] = df["esr_hinge_moment"]
+        df["ankle_right_power"]  = -df["esr_hinge_power"]
+
 
     x_norm = np.linspace(0, 100, N_POINTS)
 
@@ -265,8 +289,8 @@ def main():
 
     PHASE_SHIFT["knee_r"] = knee_shift_r
     PHASE_SHIFT["hip_r"]  = hip_shift_r
-    PHASE_SHIFT["knee_l"] = knee_shift_l
-    PHASE_SHIFT["hip_l"]  = hip_shift_l
+    PHASE_SHIFT["knee_l"] = knee_shift_l# +3.3
+    PHASE_SHIFT["hip_l"]  = hip_shift_l# +3.3
 
     print(f"Knee phase shift left: {knee_shift_l:.2f}%")
     print(f"Hip phase shift leeft:  {hip_shift_l:.2f}%")
@@ -410,48 +434,55 @@ def main():
         metrics = compare_signal_to_literature(sim_mean, gait_x, lit_y, x_norm)
         comparison_results.append({"Signal": label, **metrics})
 
+    grf_to_bw = 100.0 / (BODY_MASS_KG * 9.81)
+    grf_stance_x = np.linspace(0, 100, num=101)
+    grf_left_stance_curves = extract_stance_normalized_cycles(df["grf_left"].values)
+    grf_right_stance_curves = extract_stance_normalized_cycles(df["grf_right"].values)
+
+    for label, stance_curves, lit_key in [
+        ("GRF L", grf_left_stance_curves, "sound_grf"),
+        ("GRF R", grf_right_stance_curves, "esr_grf"),
+    ]:
+        if stance_curves.shape[0] == 0:
+            print(f"WARNING: no valid stance cycles found for {label}, skipping.")
+            continue
+        g_x, g_y = literature_curves[lit_key]
+        sim_mean = stance_curves.mean(axis=0) * grf_to_bw
+        metrics = compare_signal_to_literature(sim_mean, g_x, g_y, grf_stance_x)
+        comparison_results.append({"Signal": label, **metrics})
+
     comparison_df = pd.DataFrame(comparison_results)
     comparison_df["Unit"] = [signal_unit(label) for label in comparison_df["Signal"]]
     comparison_csv_path = os.path.join(plot_dir, "literature_comparison_metrics.csv")
     comparison_df.to_csv(comparison_csv_path, index=False)
     print(f"Saved literature comparison metrics (Pearson r + CCC + RMSE) to: {comparison_csv_path}")
     print(comparison_df.to_string(index=False))
-
-    grf_stance_x = np.linspace(0, 100, num=101)
-    grf_left_stance_curves = extract_stance_normalized_cycles(df["grf_left"].values)
-    grf_right_stance_curves = extract_stance_normalized_cycles(df["grf_right"].values)
-
-    for label, stance_curves, lit_key in [
-        ("GRF L (stance-normalized)", grf_left_stance_curves, "sound_grf"),
-        ("GRF R (stance-normalized)", grf_right_stance_curves, "esr_grf"),
-    ]:
-        if stance_curves.shape[0] == 0:
-            print(f"WARNING: no valid stance cycles found for {label}, skipping.")
-            continue
-        sim_mean = stance_curves.mean(axis=0)
-        metrics = compare_signal_to_literature(sim_mean, gait_x, lit_y, grf_stance_x)
-        comparison_results.append({"Signal": label, **metrics})
     # ============================================================
     # Cross-run summary -- ONE row per run, appended to a central CSV (not per-run-folder), so many training runs/checkpoints can be compared
     # side by side. RMSE is kept separate per unit (angle/moment/power/grf)
     # rather than averaged together across incompatible units.
     right_mask = comparison_df["Signal"].str.endswith("R")
+    left_mask = comparison_df["Signal"].str.endswith("L")
 
     summary_row = {
         "run_date": os.path.basename(os.path.dirname(plot_dir)),
         "run_timestamp": args.timestamp or os.path.basename(plot_dir),
         "subtype": args.subtype,
-        "model_type": args.model_type if args.subtype == "ESR" else "",
+        "model_type": model_type if args.subtype == "ESR" else "",
         "mean_pearson_r": comparison_df["Pearson_r"].mean(skipna=True),
         "mean_ccc": comparison_df["CCC"].mean(skipna=True),
         "mean_pearson_r_right": comparison_df.loc[right_mask, "Pearson_r"].mean(skipna=True),
         "mean_ccc_right": comparison_df.loc[right_mask, "CCC"].mean(skipna=True),
+        "mean_pearson_r_left": comparison_df.loc[left_mask, "Pearson_r"].mean(skipna=True),
+        "mean_ccc_left": comparison_df.loc[left_mask, "CCC"].mean(skipna=True),
     }
     for unit in ["angle_deg", "moment_Nm_kg", "power_W_kg"]:
         subset = comparison_df[comparison_df["Unit"] == unit]
         summary_row[f"mean_rmse_{unit}"] = subset["RMSE_vs_literature"].mean(skipna=True)
         subset_r = comparison_df[right_mask & (comparison_df["Unit"] == unit)]
         summary_row[f"mean_rmse_{unit}_right"] = subset_r["RMSE_vs_literature"].mean(skipna=True)
+        subset_l = comparison_df[left_mask & (comparison_df["Unit"] == unit)]
+        summary_row[f"mean_rmse_{unit}_left"] = subset_l["RMSE_vs_literature"].mean(skipna=True)
 
     # Zentraler, fester Ort für alle Runs (ESR wie SACH) -- explizit statt
     # über rsplit/".." hergeleitet, damit der Pfad robust bleibt.
@@ -600,8 +631,8 @@ def main():
             (axes[1], grf_right_stance_curves, esr_gait_grf, esr_lit_grf, "GRF Right"),
         ]:
             if stance_curves.shape[0] > 0:
-                mean = stance_curves.mean(axis=0) / 9.81
-                std = stance_curves.std(axis=0) / 9.81
+                mean = stance_curves.mean(axis=0) * grf_to_bw
+                std = stance_curves.std(axis=0) * grf_to_bw
                 ax.plot(grf_stance_x, mean, linewidth=2,
                         label=f"Simulation mean (n={stance_curves.shape[0]} stance phases)")
                 ax.fill_between(grf_stance_x, mean - std, mean + std, alpha=0.2)
@@ -620,30 +651,30 @@ def main():
     # Ankle angle/moment/power vs literature
     fig, axes = plt.subplots(3, 2, figsize=(14, 12))
     plot_into_axis(axes[0, 0], x_norm, ankle_angle_left_mean, ankle_angle_left_std, gait_ankle_angle, lit_ankle_angle, title="Ankle angle left", unit="deg")
-    plot_into_axis(axes[0, 1], x_norm, ankle_angle_right_mean, ankle_angle_right_std, esr_gait_ankle_angle, esr_lit_ankle_angle, title="Ankle angle right", unit="deg")
+    plot_into_axis(axes[0, 1], x_norm, ankle_angle_right_mean, ankle_angle_right_std, esr_gait_ankle_angle, esr_lit_ankle_angle, title="Ankle angle right (raw esr-hinge)", unit="deg")
 
     axes[0, 0].plot(x_norm, ref_ankle_angle_left_mean, linestyle=':', color='green', linewidth=2, label='RL goal (ref traj)')
     axes[0, 0].legend(fontsize=8)
     # No reference-trajectory DOF exists for the right ankle under ESR (the ESR hinge is not part of the reference trajectory); plotted here
     # regardless (real data for SACH, the left-side-derived proxy for ESR -- see the joint_stats() call above).
     axes[0, 1].plot(x_norm, ref_ankle_angle_right_mean, linestyle=':', color='green', linewidth=2, label='RL goal (ref traj)')
-    if is_esr:
-        axes[0, 1].plot(x_norm, -esr_angle_raw_mean, linestyle='-.', color='purple', linewidth=1.5, label='ESR (raw hinge, uncorrected)')
-        axes[0, 1].fill_between(x_norm, -(esr_angle_raw_mean - esr_angle_raw_std), -(esr_angle_raw_mean + esr_angle_raw_std), color='purple', alpha=0.15)
+    # if is_esr:
+    #     axes[0, 1].plot(x_norm, -esr_angle_raw_mean, linestyle='-.', color='purple', linewidth=1.5, label='ESR (raw hinge, uncorrected)')
+    #     axes[0, 1].fill_between(x_norm, -(esr_angle_raw_mean - esr_angle_raw_std), -(esr_angle_raw_mean + esr_angle_raw_std), color='purple', alpha=0.15)
     axes[0, 1].legend(fontsize=8)
 
     plot_into_axis(axes[1, 0], x_norm, ankle_moment_left_mean, ankle_moment_left_std, gait_ankle_moment, lit_ankle_moment, title="Ankle moment left", unit="Nm/kg")
     plot_into_axis(axes[1, 1], x_norm, ankle_moment_right_mean, ankle_moment_right_std, esr_gait_ankle_moment, esr_lit_ankle_moment, title="Ankle moment right", unit="Nm/kg")
     if is_esr:
-        axes[1, 1].plot(x_norm, esr_moment_mean, linestyle=':', color='green', linewidth=2, label='ESR')
-        axes[1, 1].plot(x_norm, esr_tau_ESR_mean/86.6, linestyle='-.', color='purple', linewidth=1.5, label='tau_ESR (Lecomte law)')
-        axes[1, 1].plot(x_norm, esr_tau_applied_mean/86.6, linestyle='-.', color='brown', linewidth=1.5, label='tau_applied (qfrc correction)')
+        axes[1, 1].plot(x_norm, -esr_moment_mean/BODY_MASS_KG, linestyle=':', color='green', linewidth=2, label='ESR')
+        axes[1, 1].plot(x_norm, -esr_tau_ESR_mean/BODY_MASS_KG, linestyle='-.', color='purple', linewidth=1.5, label='tau_ESR')
+        axes[1, 1].plot(x_norm, -esr_tau_applied_mean/BODY_MASS_KG, linestyle='-.', color='brown', linewidth=1.5, label='tau_applied (qfrc correction)')
         axes[1, 1].legend(fontsize=8)
 
     plot_into_axis(axes[2, 0], x_norm, ankle_power_left_mean, ankle_power_left_std, gait_ankle_power, lit_ankle_power, title="Ankle power left", unit="W/kg")
     plot_into_axis(axes[2, 1], x_norm, ankle_power_right_mean, ankle_power_right_std, esr_gait_ankle_power, esr_lit_ankle_power, title="Ankle power right", unit="W/kg")
     if is_esr:
-        axes[2, 1].plot(x_norm, esr_power_mean, linestyle=':', color='green', linewidth=2, label='ESR')
+        axes[2, 1].plot(x_norm, esr_power_mean/BODY_MASS_KG, linestyle=':', color='green', linewidth=2, label='ESR')
         axes[2, 1].legend(fontsize=8)
 
     plt.tight_layout()
@@ -694,6 +725,52 @@ def main():
     print(f"Saved hip comparison plot to: {hip_plot_path}")
     plt.close(fig)
 
+    # Export Data for Plotting in Latex
+        # ============================================================
+    # Kurvendaten fuer LaTeX/pgfplots (eine CSV pro Subplot)
+    sim_stats = {
+        "ankle_angle":  (ankle_angle_left_mean,  ankle_angle_left_std,  ankle_angle_right_mean,  ankle_angle_right_std),
+        "ankle_moment": (ankle_moment_left_mean, ankle_moment_left_std, ankle_moment_right_mean, ankle_moment_right_std),
+        "ankle_power":  (ankle_power_left_mean,  ankle_power_left_std,  ankle_power_right_mean,  ankle_power_right_std),
+        "knee_angle":   (knee_angle_left_mean,   knee_angle_left_std,   knee_angle_right_mean,   knee_angle_right_std),
+        "knee_moment":  (knee_moment_left_mean,  knee_moment_left_std,  knee_moment_right_mean,  knee_moment_right_std),
+        "knee_power":   (knee_power_left_mean,   knee_power_left_std,   knee_power_right_mean,   knee_power_right_std),
+        "hip_angle":    (hip_angle_left_mean,    hip_angle_left_std,    hip_angle_right_mean,    hip_angle_right_std),
+        "hip_moment":   (hip_moment_left_mean,   hip_moment_left_std,   hip_moment_right_mean,   hip_moment_right_std),
+        "hip_power":    (hip_power_left_mean,    hip_power_left_std,    hip_power_right_mean,    hip_power_right_std)}
+
+    ref_curves = {
+        "ankle_angle_left": ref_ankle_angle_left_mean, "ankle_angle_right": ref_ankle_angle_right_mean,
+        "knee_angle_left": ref_knee_angle_left_mean,   "knee_angle_right": ref_knee_angle_right_mean,
+        "hip_angle_left": -ref_hip_angle_left_mean,    "hip_angle_right": -ref_hip_angle_right_mean}
+
+    for quantity, (mean_l, std_l, mean_r, std_r) in sim_stats.items():
+        for side, mean, std, lit_prefix in (("left", mean_l, std_l, "sound"), ("right", mean_r, std_r, "esr")):
+            name = f"{quantity}_{side}"
+            extra = {"rl_goal": ref_curves[name]} if name in ref_curves else {}
+            if is_esr and name == "ankle_moment_right":
+                extra["esr_hinge"] = -esr_moment_mean / BODY_MASS_KG
+                extra["tau_esr"] = -esr_tau_ESR_mean / BODY_MASS_KG
+                extra["tau_applied"] = -esr_tau_applied_mean / BODY_MASS_KG
+            if is_esr and name == "ankle_power_right":
+                extra["esr_hinge"] = esr_power_mean / BODY_MASS_KG
+            save_curve_csv(plot_dir, name, x_norm, mean, std,
+                           lit=literature_curves[f"{lit_prefix}_{quantity}"], extra=extra)
+
+    # GRF (x-Achse in % Standphase), in % Koerpergewicht
+    grf_to_bw = 100.0 / (BODY_MASS_KG * 9.81)
+    for side, curves, lit in (("left", grf_left_stance_curves, (gait_grf, lit_grf)),
+                              ("right", grf_right_stance_curves, (esr_gait_grf, esr_lit_grf))):
+        if curves.shape[0] > 0:
+            save_curve_csv(plot_dir, f"grf_{side}", grf_stance_x, curves.mean(axis=0) * grf_to_bw,
+                           curves.std(axis=0) * grf_to_bw, lit=lit, xname="stance_pct")
+
+    # ROM-Balkendiagramm
+    pd.DataFrame({"label": rom_labels, "literature": literature_rom,
+                  "simulation": simulation_rom, "simulation_std": simulation_rom_std}
+                 ).to_csv(os.path.join(plot_dir, "plot_data", "rom_comparison.csv"), index=False)
+    print(f"Saved plot data for LaTeX to: {os.path.join(plot_dir, 'plot_data')}")
+    
     # === Symmetry analysis ===
     symmetry_df = run_symmetry_analysis(df, cycle_left, cycle_right)
     symmetry_csv_path = os.path.join(plot_dir, "symmetry_result.csv")

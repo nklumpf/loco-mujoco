@@ -64,6 +64,10 @@ parser.add_argument('--body_mass_kg', type=float, default=None,
                      help='Body mass in kg. Used for the GRF sanity check AND to '
                           'normalize moment/power (Nm/kg, W/kg) for literature comparison '
                           'and for the gait-cycle heel-strike detection threshold.')
+parser.add_argument('--socket_pos', type=float, nargs=2, default=[0.0, 0.0],
+                    metavar=('X', 'Z'), help='fixed pylon_socket position offset [m]')
+parser.add_argument('--socket_ori', type=float, nargs=3, default=[0.0, 0.0, 0.0],
+                    metavar=('X', 'Y', 'Z'), help='fixed pylon_socket orientation offset [rad?]')
 args = parser.parse_args()
 
 
@@ -83,6 +87,11 @@ def extract_run_timestamp(checkpoint_path):
 
 
 run_timestamp = extract_run_timestamp(args.path)
+# if alignment is changed by argument parser
+if any(args.socket_pos) or any(args.socket_ori):
+    tag = "_pos" + "_".join(f"{v:g}" for v in args.socket_pos) \
+        + "_ori" + "_".join(f"{v:g}" for v in args.socket_ori)
+    run_timestamp = run_timestamp + tag
 print(f"Run timestamp for output folder: {run_timestamp}")
 
 
@@ -102,15 +111,24 @@ domain_randomization_params = {
     "randomize_prosthesis_joint_stiffness": False,
     "prosthesis_joint_stiffness_range": {},
     "randomize_prosthesis_body_position": True,
+    # statt der Nullbereiche in domain_randomization_params:
     "prosthesis_body_position_range": {
-        "pylon_socket": {"x": [-0.0, 0.0], "z": [-0.0, 0.0]},
-        "talus": {"x": [-0.0, 0.0], "z": [-0.0, 0.0]},
+        "pylon_socket": {"x": [args.socket_pos[0]] * 2, "z": [args.socket_pos[1]] * 2},
+        "talus": {"x": [0.0, 0.0], "z": [0.0, 0.0]},
     },
+    # "prosthesis_body_position_range": {
+    #     "pylon_socket": {"x": [-0.0, 0.0], "z": [-0.0, 0.0]},
+    #     "talus": {"x": [-0.0, 0.0], "z": [-0.0, 0.0]},
+    # },
     "randomize_prosthesis_body_orientation": True,
     "prosthesis_body_orientation_range": {
-        "pylon_socket": {"x": [-0.0, 0.0], "y": [-0.0, 0.0], "z": [-0.0, 0.0]},
-        "talus": {"x": [-0.0, 0.0], "z": [-0.0, 0.0]},
+        "pylon_socket": {"x": [args.socket_ori[0]] * 2, "y": [args.socket_ori[1]] * 2, "z": [args.socket_ori[2]] * 2},
+        "talus": {"x": [0.0, 0.0], "z": [0.0, 0.0]},
     },
+    # "prosthesis_body_orientation_range": {
+    #     "pylon_socket": {"x": [-0.0, 0.0], "y": [-0.0, 0.0], "z": [-0.0, 0.0]},
+    #     "talus": {"x": [-0.0, 0.0], "z": [-0.0, 0.0]},
+    # },
 }
 
 # create env
@@ -172,7 +190,8 @@ if is_esr:
         return getattr(prosthesis_cfg_obj, name, default) if prosthesis_cfg_obj is not None else default
 
     ESR_LEVER_ARM = _cfg("ESR_lever_arm", 0.128)
-    ESR_HINGE_BASE_STIFFNESS = _cfg("ESR_hinge_base_stiffness", 250.0)
+    ESR_HINGE_BASE_STIFFNESS = _cfg("ESR_hinge_base_stiffness", 100.0)
+    ESR_HINGE_BASE_DAMPING = _cfg("ESR_hinge_base_damping", 7.0)
     ESR_MODEL_TYPE_RESOLVED = _cfg("ESR_model_type", "linear")
     LINEAR_PARAMS = _cfg("linear_params", {"k_heel": 57507.3, "k_keel": 24103.6})
     NONLINEAR_PARAMS = _cfg("nonlinear_params", {
@@ -183,7 +202,7 @@ if is_esr:
           f"model_type={ESR_MODEL_TYPE_RESOLVED}")
 
 
-def compute_esr_diagnostic_torques(theta_rad, esr_model_type, lever_arm, base_stiffness,
+def compute_esr_diagnostic_torques(theta_rad, theta_dot_rad_s, esr_model_type, lever_arm, base_stiffness, base_damping,
                                     linear_params, nonlinear_params):
     """
     Post-hoc NumPy reconstruction of compute_ESR_hinge_qfrc(), applied to an already-logged theta array (radians). This is a pure function of theta and fixed parameters, so it can be computed after the simulation loop instead of instrumenting the JAX pre-step function.
@@ -191,27 +210,30 @@ def compute_esr_diagnostic_torques(theta_rad, esr_model_type, lever_arm, base_st
     Returns:
         tau_ESR            -- desired total ESR joint torque (Lecomte force law)
         tau_mujoco_spring  -- torque already contributed by MuJoCo's native hinge spring 
+        tau_total -- total applied torque with external and MuJoCo contributions
         tau_applied        -- the correction actually injected via qfrc_applied 
                               (tau_ESR - tau_mujoco_spring)
     """
-    theta = np.asarray(theta_rad, dtype=float)
-    theta_clipped = np.clip(theta, np.deg2rad(-6.0), np.deg2rad(14.0))
-    z = lever_arm * np.sin(theta_clipped)
+    theta     = np.asarray(theta_rad, dtype=float)
+    theta_dot = np.asarray(theta_dot_rad_s, dtype=float)
+    z = lever_arm * np.sin(theta)
 
     if esr_model_type == "linear":
-        k = np.where(theta_clipped < 0, linear_params["k_heel"], linear_params["k_keel"])
+        k = np.where(theta < 0, linear_params["k_heel"], linear_params["k_keel"])
         F_z = k * z
     elif esr_model_type == "nonlinear":
-        a = np.where(theta_clipped < 0, nonlinear_params["heel"]["a"], nonlinear_params["keel"]["a"])
-        b = np.where(theta_clipped < 0, nonlinear_params["heel"]["b"], nonlinear_params["keel"]["b"])
+        a = np.where(theta < 0, nonlinear_params["heel"]["a"], nonlinear_params["keel"]["a"])
+        b = np.where(theta < 0, nonlinear_params["heel"]["b"], nonlinear_params["keel"]["b"])
         F_z = (a * np.abs(z) + b) * z
     else:
         raise ValueError(f"Unknown ESR_model_type: {esr_model_type}")
 
-    tau_ESR = -F_z * lever_arm * np.cos(theta_clipped)
-    tau_mujoco_spring = -base_stiffness * theta
+    tau_ESR = -F_z * lever_arm * np.cos(theta)
+    tau_mujoco_spring  = -base_stiffness * theta
+    tau_mujoco_damping = -base_damping * theta_dot
     tau_applied = tau_ESR - tau_mujoco_spring
-    return tau_ESR, tau_mujoco_spring, tau_applied
+    tau_total = tau_ESR + tau_mujoco_damping
+    return tau_ESR, tau_mujoco_spring, tau_total, tau_applied
 
 
 def detect_heel_strikes(grf, threshold_n=50.0, min_stride_samples=20):
@@ -334,6 +356,48 @@ for i in range(mj_model.nsensor):
     print(f"  ID {i:2d}: {sensor_name:40s} "
           f"adr={int(mj_model.sensor_adr[i])}, dim={int(mj_model.sensor_dim[i])}")
 
+# TODO: TEST
+# Contact-Box-Vergleich: intakte linke Seite vs. ESR rechts (nur Geometrie)
+m = mj_model                      # im Sanity-Skript stattdessen: m = env._model
+
+def _id(model, obj, name):
+    i = mujoco.mj_name2id(model, obj, name)
+    if i < 0:
+        raise RuntimeError(f"'{name}' not found in model")
+    return i
+
+def box_extent(model, d, name):
+    gid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, name)
+    if gid < 0:
+        return None
+    half = model.geom_size[gid]
+    R = d.geom_xmat[gid].reshape(3, 3)
+    signs = np.array([[sx, sy, sz] for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)])
+    pts = d.geom_xpos[gid] + (signs * half) @ R.T
+    return pts.min(0), pts.max(0)
+
+d0 = mujoco.MjData(m)
+mujoco.mj_resetData(m, d0)
+mujoco.mj_forward(m, d0)
+
+if is_esr:                        # im Sanity-Skript weglassen
+    for geom, body in [("foot_box_l", "talus_l"), ("toes_box_l", "talus_l"),
+                       ("esr_heel_contact_r", "talus_r"), ("esr_toe_contact_r", "talus_r")]:
+        ext = box_extent(m, d0, geom)
+        if ext is None:
+            print(f"{geom}: not found")
+            continue
+        ref = d0.xpos[_id(m, mujoco.mjtObj.mjOBJ_BODY, body)]
+        print(f"{geom:20s} min rel. talus [mm]: {np.round((ext[0] - ref) * 1000)}  "
+              f"max: {np.round((ext[1] - ref) * 1000)}")
+
+    for g in ["esr_heel_contact_r", "esr_toe_contact_r"]:
+        gid = _id(m, mujoco.mjtObj.mjOBJ_GEOM, g)
+        print(g, "halbe Kanten [mm]:", np.round(m.geom_size[gid] * 1000, 1))
+        print(np.round(d0.geom_xmat[gid].reshape(3, 3), 2))   # Spalten = lokale Achsen in Weltkoordinaten
+    for b in ["talus_r", "esr_forefoot_r"]:
+        print(b, "y [mm]:", round(d0.xpos[_id(m, mujoco.mjtObj.mjOBJ_BODY, b)][1] * 1000, 1))
+# TODO: TEST END
 # =============================================================================
 # Helper functions for joints, sensors, bodies
 def get_joint_qpos_address(model, joint_name):
@@ -421,7 +485,11 @@ right_foot_mimic_torque_adr = get_sensor_adr(
 if is_esr:
     esr_hinge_qpos_adr = get_joint_qpos_address(mj_model, "ankle_angle_r")
     esr_hinge_qvel_adr = get_joint_qvel_address(mj_model, "ankle_angle_r")
-    esr_hinge_torque_adr = get_sensor_adr(mj_model, get_sensor_id(mj_model, "esr_hinge_torque_r"))
+    esr_hinge_torque_adr = get_sensor_adr(mj_model, get_sensor_id(mj_model, "esr_hinge_site_r_torque_sensor"))
+    jid = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_JOINT, "ankle_angle_r")
+    hinge_axis = np.asarray(mj_model.jnt_axis[jid])
+
+    # esr_hinge_torque_adr = get_sensor_adr(mj_model, get_sensor_id(mj_model, "esr_hinge_torque_r"))
 
     # Socket flexion DOF (offset; used for corrected ankle angle)
     socket_flexion_qpos_adr = get_joint_qpos_address(mj_model, "socket_flexion_r")
@@ -446,6 +514,10 @@ if is_esr:
 # Ground reaction force bodies (heel + forefoot per side; summed for total GRF)
 if is_esr:
     right_bodies = ["talus_r", "esr_forefoot_r"]
+    esr_box_gids = [mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_GEOM, n)
+                for n in ("esr_heel_contact_r", "esr_toe_contact_r", "foot_box_l", "toes_box_l")]
+    corner_signs = np.array([[sx, sy, sz] for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)])
+    lowest_corner_log = []
 else:
     right_bodies = ["toes_r", "calcn_r"]
 
@@ -523,9 +595,9 @@ right_foot_mimic_moment_log = []
 
 esr_hinge_log = {"angle": [], "vel": [], "moment": []} if is_esr else None
 socket_flexion_log = [] if is_esr else None
-socket_flexion_qvel_log = [] if is_esr else None          # NEW
+socket_flexion_qvel_log = [] if is_esr else None          
 pylon_moment_log = [] if is_esr else None
-prosthetic_ankle_moment_log = [] if is_esr else None       # NEW
+prosthetic_ankle_moment_log = [] if is_esr else None       
 
 grf_left_log = []
 grf_right_log = []
@@ -539,6 +611,7 @@ foot_right_pos_log = []
 print("\n" + "=" * 60)
 print("\nStarting evaluation...")
 
+n_resets = 0
 for i in range(args.n_steps):
     rng, _rng = jax.random.split(rng)
 
@@ -546,6 +619,8 @@ for i in range(args.n_steps):
     action = jnp.atleast_2d(action)
 
     (obs, reward, absorbing, done, info, env_state) = env.step(env_state, action)
+    # counter for falling
+    n_resets += int(np.asarray(done).reshape(-1)[0])
 
     qpos = env_state.data.qpos[0]
     qvel = env_state.data.qvel[0]
@@ -579,10 +654,11 @@ for i in range(args.n_steps):
     if is_esr:
         esr_hinge_log["angle"].append(float(qpos[esr_hinge_qpos_adr]))
         esr_hinge_log["vel"].append(float(qvel[esr_hinge_qvel_adr]))
-        esr_hinge_log["moment"].append(float(sensordata[esr_hinge_torque_adr]))  # dim=1, no +2
+        esr_hinge_log["moment"].append(float(sensordata[esr_hinge_torque_adr:esr_hinge_torque_adr + 3] @ hinge_axis))
+      #  esr_hinge_log["moment"].append(float(sensordata[esr_hinge_torque_adr]))  # dim=1, no +2
 
         socket_flexion_log.append(float(qpos[socket_flexion_qpos_adr]))
-        socket_flexion_qvel_log.append(float(qvel[socket_flexion_qvel_adr]))    # NEW
+        socket_flexion_qvel_log.append(float(qvel[socket_flexion_qvel_adr]))   
 
         if pylon_torque_adr is not None:
             pylon_moment_log.append(float(sensordata[pylon_torque_adr + 2]))
@@ -601,6 +677,15 @@ for i in range(args.n_steps):
     grf_left_log.append(grf_left)
     grf_right_log.append(grf_right)
 
+    # TODO: TEST
+    if is_esr:
+        row = []
+        for gid in esr_box_gids:
+            R = np.asarray(env_state.data.geom_xmat[0, gid]).reshape(3, 3)
+            c = np.asarray(env_state.data.geom_xpos[0, gid]) + (corner_signs * mj_model.geom_size[gid]) @ R.T
+            row.append(c[:, 2].min())
+        lowest_corner_log.append(row)
+
     # Pelvis / foot positions
     pelvis_pos_log.append(env_state.data.xpos[0][position_body_ids["pelvis"]].copy())
     foot_left_pos_log.append(env_state.data.xpos[0][position_body_ids["foot_left"]].copy())
@@ -616,6 +701,7 @@ for i in range(args.n_steps):
             print(f"Step {i:5d}: (no ESR hinge)")
 
 env.stop()
+print(f"Resets during evaluation (falls/terminations): {n_resets}")
 
 
 # =============================================================================
@@ -628,6 +714,7 @@ velocity = {}
 moment = {}
 power = {}
 ref_angle_deg = {}
+
 
 for key in joint_info:
     angle_deg[key] = np.rad2deg(np.asarray(logs[key]["angle"]))
@@ -664,15 +751,16 @@ if is_esr:
     # =========================================================================
     # applied-torque reconstruction (tau_ESR, tau_mujoco_spring, tau_applied)
     esr_theta_rad = np.asarray(esr_hinge_log["angle"])  # radians, as logged
-    esr_tau_ESR, esr_tau_mujoco_spring, esr_tau_applied = compute_esr_diagnostic_torques(
-        esr_theta_rad, ESR_MODEL_TYPE_RESOLVED, ESR_LEVER_ARM, ESR_HINGE_BASE_STIFFNESS,
+    esr_theta_dot_rad = np.asarray(esr_hinge_log["vel"])  # rad/s, as logged
+    esr_tau, esr_tau_mujoco_spring, esr_tau_ESR, esr_tau_applied = compute_esr_diagnostic_torques(
+        esr_theta_rad, esr_theta_dot_rad, ESR_MODEL_TYPE_RESOLVED, ESR_LEVER_ARM, ESR_HINGE_BASE_STIFFNESS, ESR_HINGE_BASE_DAMPING,
         LINEAR_PARAMS, NONLINEAR_PARAMS)
 
     # =========================================================================
     # corrected ankle_right angle / moment / power for the prosthesis side
     socket_flexion_qvel_arr = np.asarray(socket_flexion_qvel_log)
-    segment_angular_velocity = esr_velocity + socket_flexion_qvel_arr  # rad/s 
-    ankle_right_angle_deg_lit = -ankle_right_segment_angle_deg
+    segment_angular_velocity = -(esr_velocity + socket_flexion_qvel_arr)  # rad/s 
+    ankle_right_angle_deg_lit = -esr_angle_deg # ankle_right_segment_angle_deg
 
     prosthetic_ankle_moment = np.asarray(prosthetic_ankle_moment_log)
     used_prosthetic_ankle_sensor = not np.all(np.isnan(prosthetic_ankle_moment))
@@ -686,9 +774,11 @@ if is_esr:
         ankle_right_moment_corrected = right_foot_mimic_moment.copy()
     else:
         ankle_right_moment_corrected = prosthetic_ankle_moment
-    ankle_right_power_corrected = ankle_right_moment_corrected * segment_angular_velocity
+    ankle_right_power_corrected = ankle_right_moment_corrected * (-esr_velocity) 
 
 else:
+    angle_deg["ankle_right"] = -angle_deg["ankle_right"]
+    velocity["ankle_right"]  = -velocity["ankle_right"]
     moment["ankle_right"] = right_foot_mimic_moment
     power["ankle_right"]  = moment["ankle_right"] * velocity["ankle_right"]
     # direct ESR measured values
@@ -710,6 +800,15 @@ else:
 # Ground reaction force
 grf_left  = np.asarray(grf_left_log)
 grf_right = np.asarray(grf_right_log)
+if is_esr:
+    low = np.asarray(lowest_corner_log)
+    stance_r = grf_right > 50.0
+    stance_l = grf_left > 50.0
+    for k, name in enumerate(["Ferse_r", "Zehe_r", "Ferse_l", "Zehe_l"]):
+        z_r = low[stance_r, k] * 1000
+        print(f"{name}: tiefste Ecke in Standphase [mm]: min {z_r.min():.1f}, 5%-Perzentil {np.percentile(z_r, 5):.1f}")
+        z_l = low[stance_l, k] * 1000
+        print(f"{name}: tiefste Ecke in Standphase [mm]: min {z_l.min():.1f}, 5%-Perzentil {np.percentile(z_l, 5):.1f}")
 
 
 pelvis_pos     = np.asarray(pelvis_pos_log)
